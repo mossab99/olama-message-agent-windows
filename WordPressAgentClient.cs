@@ -65,7 +65,11 @@ namespace OlamaMessageAgent
             }
         }
 
-        public static async Task<HeartbeatResult> SendHeartbeatAsync(AgentSettings settings)
+        public static async Task<HeartbeatResult> SendHeartbeatAsync(
+            AgentSettings settings, 
+            bool kdeCliFound, 
+            string kdeDeviceName, 
+            bool kdeDeviceReachable)
         {
             string baseUrl = NormalizeBaseUrl(settings.SiteUrl);
             if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(settings.AgentUuid) || string.IsNullOrEmpty(settings.ApiKey))
@@ -80,7 +84,7 @@ namespace OlamaMessageAgent
 
             string endpoint = baseUrl + "/wp-json/olama-messages/v1/agent/heartbeat";
 
-            // Prepare diagnostics payload representing agent state
+            // Prepare telemetry payload representing agent state
             var payload = new Dictionary<string, object>
             {
                 { "platform", "Windows" },
@@ -88,10 +92,10 @@ namespace OlamaMessageAgent
                 { "machine_name", Environment.MachineName },
                 { "windows_user", Environment.UserName },
                 { "kde_cli_path", settings.KdeCliPath ?? string.Empty },
-                { "kde_cli_found", false },
+                { "kde_cli_found", kdeCliFound },
                 { "kde_device_id", settings.KdeDeviceId ?? string.Empty },
-                { "kde_device_name", "" },
-                { "kde_device_reachable", false }
+                { "kde_device_name", kdeDeviceName ?? string.Empty },
+                { "kde_device_reachable", kdeDeviceReachable }
             };
 
             string jsonPayload = Serializer.Serialize(payload);
@@ -146,6 +150,136 @@ namespace OlamaMessageAgent
                     Message = "Connection failed",
                     ErrorDetails = ex.Message
                 };
+            }
+        }
+
+        public static async Task<HeartbeatResult> SendDiagnosticsAsync(
+            AgentSettings settings, 
+            bool kdeCliFound, 
+            List<KdeDevice> devices)
+        {
+            string baseUrl = NormalizeBaseUrl(settings.SiteUrl);
+            if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(settings.AgentUuid) || string.IsNullOrEmpty(settings.ApiKey))
+            {
+                return new HeartbeatResult { Success = false, Message = "Incomplete settings", StatusCode = 0 };
+            }
+
+            string endpoint = baseUrl + "/wp-json/olama-messages/v1/agent/diagnostics";
+
+            var serializedDevices = new List<Dictionary<string, object>>();
+            foreach (var d in devices)
+            {
+                serializedDevices.Add(new Dictionary<string, object>
+                {
+                    { "id", d.Id },
+                    { "name", d.Name },
+                    { "reachable", d.Reachable }
+                });
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "kde_cli_path", settings.KdeCliPath ?? string.Empty },
+                { "kde_cli_found", kdeCliFound },
+                { "selected_device_id", settings.KdeDeviceId ?? string.Empty },
+                { "devices", serializedDevices }
+            };
+
+            string jsonPayload = Serializer.Serialize(payload);
+
+            try
+            {
+                using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+                {
+                    request.Headers.Add("X-Olama-Agent-UUID", settings.AgentUuid);
+                    request.Headers.Add("X-Olama-Agent-Key", settings.ApiKey);
+                    request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                    Logger.Info("Sending detailed agent discovery diagnostics to WordPress.");
+
+                    using (var response = await HttpClient.SendAsync(request))
+                    {
+                        int code = (int)response.StatusCode;
+                        string content = await response.Content.ReadAsStringAsync();
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            Logger.Info("Diagnostics uploaded successfully.");
+                            return new HeartbeatResult { Success = true, StatusCode = code, Message = "Diagnostics uploaded." };
+                        }
+                        else
+                        {
+                            Logger.Warn($"Diagnostics upload rejected: {code}. Details: {content}");
+                            return new HeartbeatResult { Success = false, StatusCode = code, Message = response.ReasonPhrase, ErrorDetails = content };
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to upload diagnostics.", ex);
+                return new HeartbeatResult { Success = false, StatusCode = 0, Message = ex.Message };
+            }
+        }
+
+        public static async Task<HeartbeatResult> SendTestResultAsync(
+            AgentSettings settings, 
+            string phone, 
+            string messageBody, 
+            SmsSendResult sendResult)
+        {
+            string baseUrl = NormalizeBaseUrl(settings.SiteUrl);
+            if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(settings.AgentUuid) || string.IsNullOrEmpty(settings.ApiKey))
+            {
+                return new HeartbeatResult { Success = false, Message = "Incomplete settings", StatusCode = 0 };
+            }
+
+            string endpoint = baseUrl + "/wp-json/olama-messages/v1/agent/test-result";
+
+            var payload = new Dictionary<string, object>
+            {
+                { "phone_e164", phone },
+                { "message_body", messageBody },
+                { "status", sendResult.Success ? "sent_by_kde" : "failed" },
+                { "result_code", sendResult.ExitCode.ToString() },
+                { "stdout_text", sendResult.Stdout ?? string.Empty },
+                { "stderr_text", sendResult.Stderr ?? string.Empty }
+            };
+
+            string jsonPayload = Serializer.Serialize(payload);
+
+            try
+            {
+                using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+                {
+                    request.Headers.Add("X-Olama-Agent-UUID", settings.AgentUuid);
+                    request.Headers.Add("X-Olama-Agent-Key", settings.ApiKey);
+                    request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                    Logger.Info($"Uploading manual test SMS result for target phone: {phone}");
+
+                    using (var response = await HttpClient.SendAsync(request))
+                    {
+                        int code = (int)response.StatusCode;
+                        string content = await response.Content.ReadAsStringAsync();
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            Logger.Info("Test SMS result logged to WordPress successfully.");
+                            return new HeartbeatResult { Success = true, StatusCode = code, Message = "Test result logged." };
+                        }
+                        else
+                        {
+                            Logger.Warn($"Test SMS result upload rejected: {code}. Details: {content}");
+                            return new HeartbeatResult { Success = false, StatusCode = code, Message = response.ReasonPhrase, ErrorDetails = content };
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to upload test SMS result.", ex);
+                return new HeartbeatResult { Success = false, StatusCode = 0, Message = ex.Message };
             }
         }
 

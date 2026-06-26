@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace OlamaMessageAgent
 {
@@ -15,12 +16,18 @@ namespace OlamaMessageAgent
         private readonly NotifyIcon _notifyIcon;
         private readonly ContextMenuStrip _contextMenu;
         private readonly ToolStripMenuItem _menuStatus;
+        private readonly ToolStripMenuItem _menuTestSms;
         private readonly System.Windows.Forms.Timer _heartbeatTimer;
 
         private AgentSettings _settings;
         private bool _heartbeatInProgress;
-        
         private Icon _currentIcon;
+
+        // Telemetry Cache
+        private bool _kdeCliFound;
+        private string _kdeDeviceName = string.Empty;
+        private bool _kdeDeviceReachable;
+        private DateTime _lastDiagnosticsTime = DateTime.MinValue;
 
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
         private static extern bool DestroyIcon(IntPtr handle);
@@ -46,6 +53,9 @@ namespace OlamaMessageAgent
 
             var menuSettings = new ToolStripMenuItem("Open Settings", null, (s, e) => ShowSettingsForm());
             _contextMenu.Items.Add(menuSettings);
+
+            _menuTestSms = new ToolStripMenuItem("Send Test SMS...", null, (s, e) => ShowManualTestForm()) { Enabled = false };
+            _contextMenu.Items.Add(_menuTestSms);
 
             var menuLogs = new ToolStripMenuItem("View Agent Logs", null, (s, e) => ShowLogsForm());
             _contextMenu.Items.Add(menuLogs);
@@ -87,6 +97,10 @@ namespace OlamaMessageAgent
         {
             Logger.Info("Settings updated. Reloading agent configuration.");
             _settings = SettingsManager.LoadSettings();
+
+            // Force immediate diagnostics discovery run on next tick
+            _lastDiagnosticsTime = DateTime.MinValue;
+
             ReloadTimer();
             Task.Run(async () => await PerformHeartbeatTickAsync());
         }
@@ -115,33 +129,113 @@ namespace OlamaMessageAgent
                 if (string.IsNullOrEmpty(_settings.SiteUrl) || string.IsNullOrEmpty(_settings.AgentUuid) || string.IsNullOrEmpty(_settings.ApiKey))
                 {
                     UpdateStatusIndicator("Unconfigured", Color.Gray);
+                    UpdateMenuStates(false);
                     return;
                 }
 
-                var result = await WordPressAgentClient.SendHeartbeatAsync(_settings);
+                // Check CLI file exists (light check, no process execution)
+                _kdeCliFound = KdeCliHelper.DetectCli(_settings.KdeCliPath);
+
+                // Run slow discovery diagnostics periodically (every 300 seconds)
+                var elapsed = DateTime.Now - _lastDiagnosticsTime;
+                if (elapsed.TotalSeconds >= 300)
+                {
+                    _lastDiagnosticsTime = DateTime.Now;
+                    // Trigger discovery on a background thread pool task so we do not block heartbeat network POST
+                    _ = Task.Run(async () => await RunDiagnosticsAsync());
+                }
+
+                // Dispatch heartbeat carrying last known cached states
+                var result = await WordPressAgentClient.SendHeartbeatAsync(
+                    _settings,
+                    _kdeCliFound,
+                    _kdeDeviceName,
+                    _kdeDeviceReachable
+                );
 
                 if (result.Success)
                 {
                     UpdateStatusIndicator("Online", Color.Green);
+                    UpdateMenuStates(true);
                 }
                 else if (result.StatusCode == 403 || result.StatusCode == 401)
                 {
                     UpdateStatusIndicator("Auth Failed", Color.Gold);
+                    UpdateMenuStates(false);
                 }
                 else
                 {
                     UpdateStatusIndicator("Offline", Color.Red);
+                    UpdateMenuStates(false);
                 }
             }
             catch (Exception ex)
             {
                 Logger.Error("Unhandled exception inside heartbeat loop.", ex);
                 UpdateStatusIndicator("Offline", Color.Red);
+                UpdateMenuStates(false);
             }
             finally
             {
                 _heartbeatInProgress = false;
             }
+        }
+
+        public async Task RunDiagnosticsAsync()
+        {
+            try
+            {
+                Logger.Info("Running background KDE device discovery diagnostics...");
+                bool cliFound = KdeCliHelper.DetectCli(_settings.KdeCliPath);
+                _kdeCliFound = cliFound;
+
+                var devices = KdeCliHelper.DiscoverDevices(_settings.KdeCliPath);
+                
+                bool targetDeviceFound = false;
+                if (!string.IsNullOrEmpty(_settings.KdeDeviceId) && devices.Count > 0)
+                {
+                    foreach (var d in devices)
+                    {
+                        if (d.Id == _settings.KdeDeviceId)
+                        {
+                            _kdeDeviceName = d.Name;
+                            _kdeDeviceReachable = d.Reachable;
+                            targetDeviceFound = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!targetDeviceFound)
+                {
+                    _kdeDeviceReachable = false;
+                    if (!string.IsNullOrEmpty(_settings.KdeDeviceId))
+                    {
+                        Logger.Warn($"Target Device ID '{_settings.KdeDeviceId}' was not found in discovered devices.");
+                    }
+                }
+
+                // POST diagnostics to WordPress
+                await WordPressAgentClient.SendDiagnosticsAsync(_settings, cliFound, devices);
+
+                // Update UI thread menu states
+                UpdateMenuStates(true);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Error executing background discovery diagnostics.", ex);
+            }
+        }
+
+        private void UpdateMenuStates(bool isOnline)
+        {
+            if (_notifyIcon.ContextMenuStrip.InvokeRequired)
+            {
+                _notifyIcon.ContextMenuStrip.BeginInvoke(new Action<bool>(UpdateMenuStates), isOnline);
+                return;
+            }
+            // Enable manual test SMS option only when online and a device ID is set
+            _menuTestSms.Enabled = isOnline && !string.IsNullOrEmpty(_settings.KdeDeviceId);
         }
 
         private async Task TriggerHeartbeatAsync()
@@ -213,6 +307,21 @@ namespace OlamaMessageAgent
             }
 
             var frm = new SettingsForm();
+            frm.Show();
+        }
+
+        private void ShowManualTestForm()
+        {
+            foreach (Form openForm in Application.OpenForms)
+            {
+                if (openForm is ManualTestForm)
+                {
+                    openForm.BringToFront();
+                    return;
+                }
+            }
+
+            var frm = new ManualTestForm();
             frm.Show();
         }
 

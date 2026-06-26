@@ -62,7 +62,7 @@ namespace OlamaMessageAgent
             // Sanity filter to prevent accidental logging of API secrets or sensitive auth headers
             string sanitized = SanitizeMessage(message);
 
-            string line = $"[{DateTime.Now:yyyy-MM-dd HH:i:ss}] [{level}] {sanitized}";
+            string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] {sanitized}";
 
             lock (LockObj)
             {
@@ -143,7 +143,7 @@ namespace OlamaMessageAgent
                     // Ignore
                 }
             }
-            OnLogAdded?.Invoke($"[{DateTime.Now:yyyy-MM-dd HH:i:ss}] [INFO] Logs cleared by user.");
+            OnLogAdded?.Invoke($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [INFO] Logs cleared by user.");
         }
     }
 }

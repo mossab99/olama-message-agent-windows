@@ -27,8 +27,7 @@ namespace OlamaMessageAgent
             this.numHeartbeatInterval = new System.Windows.Forms.NumericUpDown();
             this.lblIntervalUnit = new System.Windows.Forms.Label();
             this.grpKdeSettings = new System.Windows.Forms.GroupBox();
-            this.lblKdeDeviceComing = new System.Windows.Forms.Label();
-            this.txtKdeDeviceId = new System.Windows.Forms.TextBox();
+            this.cmbKdeDevices = new System.Windows.Forms.ComboBox();
             this.lblKdeDeviceId = new System.Windows.Forms.Label();
             this.btnDetectKde = new System.Windows.Forms.Button();
             this.txtKdeCliPath = new System.Windows.Forms.TextBox();
@@ -45,7 +44,6 @@ namespace OlamaMessageAgent
             // lblSiteUrl
             // 
             this.lblSiteUrl.AutoSize = true;
-            this.lblSiteUrl.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblSiteUrl.Location = new System.Drawing.Point(12, 15);
             this.lblSiteUrl.Name = "lblSiteUrl";
             this.lblSiteUrl.Size = new System.Drawing.Size(107, 15);
@@ -54,7 +52,6 @@ namespace OlamaMessageAgent
             // 
             // txtSiteUrl
             // 
-            this.txtSiteUrl.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.txtSiteUrl.Location = new System.Drawing.Point(135, 12);
             this.txtSiteUrl.Name = "txtSiteUrl";
             this.txtSiteUrl.Size = new System.Drawing.Size(327, 23);
@@ -63,7 +60,6 @@ namespace OlamaMessageAgent
             // lblAgentUuid
             // 
             this.lblAgentUuid.AutoSize = true;
-            this.lblAgentUuid.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblAgentUuid.Location = new System.Drawing.Point(12, 47);
             this.lblAgentUuid.Name = "lblAgentUuid";
             this.lblAgentUuid.Size = new System.Drawing.Size(71, 15);
@@ -72,7 +68,6 @@ namespace OlamaMessageAgent
             // 
             // txtAgentUuid
             // 
-            this.txtAgentUuid.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.txtAgentUuid.Location = new System.Drawing.Point(135, 44);
             this.txtAgentUuid.Name = "txtAgentUuid";
             this.txtAgentUuid.Size = new System.Drawing.Size(327, 23);
@@ -81,7 +76,6 @@ namespace OlamaMessageAgent
             // lblApiKey
             // 
             this.lblApiKey.AutoSize = true;
-            this.lblApiKey.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblApiKey.Location = new System.Drawing.Point(12, 79);
             this.lblApiKey.Name = "lblApiKey";
             this.lblApiKey.Size = new System.Drawing.Size(83, 15);
@@ -90,7 +84,6 @@ namespace OlamaMessageAgent
             // 
             // txtApiKey
             // 
-            this.txtApiKey.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.txtApiKey.Location = new System.Drawing.Point(135, 76);
             this.txtApiKey.Name = "txtApiKey";
             this.txtApiKey.PasswordChar = '●';
@@ -100,7 +93,6 @@ namespace OlamaMessageAgent
             // lblHeartbeatInterval
             // 
             this.lblHeartbeatInterval.AutoSize = true;
-            this.lblHeartbeatInterval.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblHeartbeatInterval.Location = new System.Drawing.Point(12, 111);
             this.lblHeartbeatInterval.Name = "lblHeartbeatInterval";
             this.lblHeartbeatInterval.Size = new System.Drawing.Size(104, 15);
@@ -109,7 +101,6 @@ namespace OlamaMessageAgent
             // 
             // numHeartbeatInterval
             // 
-            this.numHeartbeatInterval.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.numHeartbeatInterval.Location = new System.Drawing.Point(135, 109);
             this.numHeartbeatInterval.Maximum = new decimal(new int[] {
             3600,
@@ -133,7 +124,6 @@ namespace OlamaMessageAgent
             // lblIntervalUnit
             // 
             this.lblIntervalUnit.AutoSize = true;
-            this.lblIntervalUnit.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblIntervalUnit.Location = new System.Drawing.Point(221, 111);
             this.lblIntervalUnit.Name = "lblIntervalUnit";
             this.lblIntervalUnit.Size = new System.Drawing.Size(50, 15);
@@ -142,8 +132,7 @@ namespace OlamaMessageAgent
             // 
             // grpKdeSettings
             // 
-            this.grpKdeSettings.Controls.Add(this.lblKdeDeviceComing);
-            this.grpKdeSettings.Controls.Add(this.txtKdeDeviceId);
+            this.grpKdeSettings.Controls.Add(this.cmbKdeDevices);
             this.grpKdeSettings.Controls.Add(this.lblKdeDeviceId);
             this.grpKdeSettings.Controls.Add(this.btnDetectKde);
             this.grpKdeSettings.Controls.Add(this.txtKdeCliPath);
@@ -155,28 +144,22 @@ namespace OlamaMessageAgent
             this.grpKdeSettings.TabIndex = 9;
             this.grpKdeSettings.TabStop = false;
             this.grpKdeSettings.Text = "KDE Connect Local Options";
-            this.lblKdeDeviceComing.AutoSize = true;
-            this.lblKdeDeviceComing.Font = new System.Drawing.Font("Segoe UI", 8.25F, System.Drawing.FontStyle.Italic, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblKdeDeviceComing.ForeColor = System.Drawing.Color.Gray;
-            this.lblKdeDeviceComing.Location = new System.Drawing.Point(259, 107);
-            this.lblKdeDeviceComing.Name = "lblKdeDeviceComing";
-            this.lblKdeDeviceComing.Size = new System.Drawing.Size(176, 13);
-            this.lblKdeDeviceComing.TabIndex = 5;
-            this.lblKdeDeviceComing.Text = "(KDE CLI execution coming in Run 3D)";
             // 
-            // txtKdeDeviceId
+            // cmbKdeDevices
             // 
-            this.txtKdeDeviceId.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.txtKdeDeviceId.Location = new System.Drawing.Point(120, 71);
-            this.txtKdeDeviceId.Name = "txtKdeDeviceId";
-            this.txtKdeDeviceId.Size = new System.Drawing.Size(315, 23);
-            this.txtKdeDeviceId.TabIndex = 4;
+            this.cmbKdeDevices.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cmbKdeDevices.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.cmbKdeDevices.FormattingEnabled = true;
+            this.cmbKdeDevices.Location = new System.Drawing.Point(120, 68);
+            this.cmbKdeDevices.Name = "cmbKdeDevices";
+            this.cmbKdeDevices.Size = new System.Drawing.Size(315, 23);
+            this.cmbKdeDevices.TabIndex = 4;
             // 
             // lblKdeDeviceId
             // 
             this.lblKdeDeviceId.AutoSize = true;
             this.lblKdeDeviceId.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblKdeDeviceId.Location = new System.Drawing.Point(12, 74);
+            this.lblKdeDeviceId.Location = new System.Drawing.Point(12, 71);
             this.lblKdeDeviceId.Name = "lblKdeDeviceId";
             this.lblKdeDeviceId.Size = new System.Drawing.Size(91, 15);
             this.lblKdeDeviceId.TabIndex = 3;
@@ -184,14 +167,14 @@ namespace OlamaMessageAgent
             // 
             // btnDetectKde
             // 
-            this.btnDetectKde.Enabled = false;
             this.btnDetectKde.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.btnDetectKde.Location = new System.Drawing.Point(120, 102);
             this.btnDetectKde.Name = "btnDetectKde";
-            this.btnDetectKde.Size = new System.Drawing.Size(133, 23);
+            this.btnDetectKde.Size = new System.Drawing.Size(160, 25);
             this.btnDetectKde.TabIndex = 2;
-            this.btnDetectKde.Text = "Detect CLI (Disabled)";
+            this.btnDetectKde.Text = "Detect CLI & Paired Devices";
             this.btnDetectKde.UseVisualStyleBackColor = true;
+            this.btnDetectKde.Click += new System.EventHandler(this.BtnDetectKde_Click);
             // 
             // txtKdeCliPath
             // 
@@ -213,7 +196,6 @@ namespace OlamaMessageAgent
             // 
             // btnTestConnection
             // 
-            this.btnTestConnection.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.btnTestConnection.Location = new System.Drawing.Point(15, 303);
             this.btnTestConnection.Name = "btnTestConnection";
             this.btnTestConnection.Size = new System.Drawing.Size(120, 25);
@@ -235,7 +217,7 @@ namespace OlamaMessageAgent
             // 
             // btnCancel
             // 
-            this.btnCancel.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
             this.btnCancel.Location = new System.Drawing.Point(377, 303);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(85, 25);
@@ -247,7 +229,6 @@ namespace OlamaMessageAgent
             // lblStatusHeader
             // 
             this.lblStatusHeader.AutoSize = true;
-            this.lblStatusHeader.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lblStatusHeader.Location = new System.Drawing.Point(15, 340);
             this.lblStatusHeader.Name = "lblStatusHeader";
             this.lblStatusHeader.Size = new System.Drawing.Size(105, 15);
@@ -318,13 +299,12 @@ namespace OlamaMessageAgent
         private System.Windows.Forms.Label lblKdeCliPath;
         private System.Windows.Forms.TextBox txtKdeCliPath;
         private System.Windows.Forms.Button btnDetectKde;
-        private System.Windows.Forms.TextBox txtKdeDeviceId;
+        private System.Windows.Forms.ComboBox cmbKdeDevices;
         private System.Windows.Forms.Label lblKdeDeviceId;
         private System.Windows.Forms.Button btnTestConnection;
         private System.Windows.Forms.Button btnSave;
         private System.Windows.Forms.Button btnCancel;
         private System.Windows.Forms.Label lblStatusHeader;
         private System.Windows.Forms.Label lblStatus;
-        private System.Windows.Forms.Label lblKdeDeviceComing;
     }
 }
