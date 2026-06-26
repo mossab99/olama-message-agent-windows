@@ -1,0 +1,21 @@
+# Build folders
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio files
+.vs/
+*.opensdf
+*.sdf
+*.cache
+*.KeepOpen
+*.VC.db
+
+# Logs & temp configs
+*.log
+local-config.json
