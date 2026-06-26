@@ -10,7 +10,7 @@ if (!(Test-Path "bin\Release")) {
 }
 
 # Run Roslyn compilation to a temporary filename to bypass file locks on the running executable
-$outputExe = "bin\Release\OlamaMessageAgent_build.exe"
+$outputExe = "bin\Release\OlamaMessageAgent_build_new.exe"
 if (Test-Path $outputExe) { Remove-Item $outputExe -Force }
 
 & $cscPath /target:winexe /out:$outputExe /r:System.dll,System.Windows.Forms.dll,System.Drawing.dll,System.Net.Http.dll,System.Web.Extensions.dll,System.Security.dll *.cs

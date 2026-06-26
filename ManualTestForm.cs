@@ -53,11 +53,11 @@ namespace OlamaMessageAgent
             string phone = txtPhoneNumber.Text.Trim();
             string message = txtMessageBody.Text.Trim();
 
-            // Validate Jordanian E.164 Phone format: +9627[7|8|9]XXXXXXX
-            if (!Regex.IsMatch(phone, @"^\+9627[789]\d{7}$"))
+            // Validate Jordanian E.164 Phone format: +9627XXXXXXXX
+            if (!Regex.IsMatch(phone, @"^\+9627\d{8}$"))
             {
                 MessageBox.Show(
-                    "Invalid phone number format. Target phone must match the Jordanian E.164 pattern: +9627XXXXXXXX (starting with +96277, +96278, or +96279 followed by 7 digits).",
+                    "Invalid phone number format. Target phone must match the Jordanian E.164 pattern: +9627XXXXXXXX.",
                     "Validation Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
