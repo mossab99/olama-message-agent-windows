@@ -19,6 +19,15 @@ namespace OlamaMessageAgent
         private readonly ToolStripMenuItem _menuTestSms;
         private readonly System.Windows.Forms.Timer _heartbeatTimer;
 
+        // ── Dispatcher fields (Phase 4 Run 4C) ───────────────────────────────
+        private DispatcherService _dispatcher;
+        private readonly System.Windows.Forms.Timer _dispatcherTimer;
+        private ToolStripMenuItem _menuDispatcherStatus;
+        private ToolStripMenuItem _menuDispatcherEnable;
+        private ToolStripMenuItem _menuDispatcherDisable;
+        private ToolStripMenuItem _menuDispatcherPollNow;
+        private bool _dispatcherPollInProgress;
+
         private AgentSettings _settings;
         private bool _heartbeatInProgress;
         private Icon _currentIcon;
@@ -28,6 +37,12 @@ namespace OlamaMessageAgent
         private string _kdeDeviceName = string.Empty;
         private bool _kdeDeviceReachable;
         private DateTime _lastDiagnosticsTime = DateTime.MinValue;
+
+        /// <summary>
+        /// Exposes the last known KDE device reachability for the dispatcher's
+        /// capability reporting without running a new discovery process.
+        /// </summary>
+        public bool LastKnownDeviceReachable => _kdeDeviceReachable;
 
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
         private static extern bool DestroyIcon(IntPtr handle);
@@ -65,6 +80,23 @@ namespace OlamaMessageAgent
 
             _contextMenu.Items.Add(new ToolStripSeparator());
 
+            // ── Dispatcher section (Phase 4 Run 4C) ──────────────────────────
+            _menuDispatcherStatus = new ToolStripMenuItem("Dispatcher: Disabled") { Enabled = false };
+            _contextMenu.Items.Add(_menuDispatcherStatus);
+
+            _menuDispatcherEnable = new ToolStripMenuItem("Enable Dispatcher", null, (s, e) => EnableDispatcher());
+            _contextMenu.Items.Add(_menuDispatcherEnable);
+
+            _menuDispatcherDisable = new ToolStripMenuItem("Disable Dispatcher", null, (s, e) => DisableDispatcher());
+            _menuDispatcherDisable.Enabled = false;
+            _contextMenu.Items.Add(_menuDispatcherDisable);
+
+            _menuDispatcherPollNow = new ToolStripMenuItem("Poll Now", null, async (s, e) => await TriggerDispatcherPollAsync());
+            _menuDispatcherPollNow.Enabled = false;
+            _contextMenu.Items.Add(_menuDispatcherPollNow);
+
+            _contextMenu.Items.Add(new ToolStripSeparator());
+
             var menuExit = new ToolStripMenuItem("Exit Agent", null, (s, e) => ExitApplication());
             _contextMenu.Items.Add(menuExit);
 
@@ -86,7 +118,29 @@ namespace OlamaMessageAgent
             _heartbeatTimer = new System.Windows.Forms.Timer();
             _heartbeatTimer.Tick += async (s, e) => await PerformHeartbeatTickAsync();
 
-            // Start timer if configured
+            // Initialize Dispatcher Timer
+            _dispatcherTimer = new System.Windows.Forms.Timer();
+            _dispatcherTimer.Tick += async (s, e) => await RunDispatcherTickAsync();
+            // Default interval; will be updated from loaded config
+            _dispatcherTimer.Interval = 30000; // 30 seconds
+
+            // Initialize dispatcher service and restore the operator's persisted choice.
+            _dispatcher = new DispatcherService(_settings);
+
+            bool autoEnableRequested = string.Equals(
+                Environment.GetEnvironmentVariable("OLAMA_AGENT_AUTO_ENABLE_DISPATCHER"),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+            if (_settings.DispatcherEnabled || autoEnableRequested)
+            {
+                Logger.Info("Restoring enabled dispatcher state at startup.");
+                _dispatcher.Enable();
+                // Let the UI timer trigger the first poll so all continuations stay on the UI thread.
+                _dispatcherTimer.Interval = 1000;
+                _dispatcherTimer.Start();
+            }
+
+            // Start heartbeat timer if configured
             ReloadTimer();
 
             // Perform initial heartbeat
@@ -100,6 +154,23 @@ namespace OlamaMessageAgent
 
             // Force immediate diagnostics discovery run on next tick
             _lastDiagnosticsTime = DateTime.MinValue;
+
+            // Rebuild dispatcher with fresh settings and restore its persisted state.
+            bool wasEnabled = _dispatcher != null && _dispatcher.IsEnabled;
+            if (wasEnabled)
+            {
+                _dispatcher.Disable();
+                _dispatcherTimer.Stop();
+                Logger.Info("Dispatcher paused while settings reload.");
+            }
+            _dispatcher = new DispatcherService(_settings);
+
+            if (_settings.DispatcherEnabled || wasEnabled)
+            {
+                _dispatcher.Enable();
+                _dispatcherTimer.Interval = 1000;
+                _dispatcherTimer.Start();
+            }
 
             ReloadTimer();
             Task.Run(async () => await PerformHeartbeatTickAsync());
@@ -136,13 +207,17 @@ namespace OlamaMessageAgent
                 // Check CLI file exists (light check, no process execution)
                 _kdeCliFound = KdeCliHelper.DetectCli(_settings.KdeCliPath);
 
-                // Run slow discovery diagnostics periodically (every 300 seconds)
+                // Refresh reachability before every heartbeat. A five-minute cached
+                // value is unsafe for an SMS sender because phones disconnect often.
+                var devices = await Task.Run(() => RefreshKdeDeviceState());
+
+                // Keep the detailed diagnostics audit on its original five-minute
+                // cadence, reusing the fresh discovery result from this heartbeat.
                 var elapsed = DateTime.Now - _lastDiagnosticsTime;
                 if (elapsed.TotalSeconds >= 300)
                 {
                     _lastDiagnosticsTime = DateTime.Now;
-                    // Trigger discovery on a background thread pool task so we do not block heartbeat network POST
-                    _ = Task.Run(async () => await RunDiagnosticsAsync());
+                    _ = WordPressAgentClient.SendDiagnosticsAsync(_settings, _kdeCliFound, devices);
                 }
 
                 // Dispatch heartbeat carrying last known cached states
@@ -150,13 +225,22 @@ namespace OlamaMessageAgent
                     _settings,
                     _kdeCliFound,
                     _kdeDeviceName,
-                    _kdeDeviceReachable
+                    _kdeDeviceReachable,
+                    _dispatcher
                 );
 
                 if (result.Success)
                 {
-                    UpdateStatusIndicator("Online", Color.Green);
-                    UpdateMenuStates(true);
+                    if (_kdeDeviceReachable)
+                    {
+                        UpdateStatusIndicator("Online", Color.Green);
+                        UpdateMenuStates(true);
+                    }
+                    else
+                    {
+                        UpdateStatusIndicator("Device Disconnected", Color.OrangeRed);
+                        UpdateMenuStates(false);
+                    }
                 }
                 else if (result.StatusCode == 403 || result.StatusCode == 401)
                 {
@@ -189,42 +273,41 @@ namespace OlamaMessageAgent
                 bool cliFound = KdeCliHelper.DetectCli(_settings.KdeCliPath);
                 _kdeCliFound = cliFound;
 
-                var devices = KdeCliHelper.DiscoverDevices(_settings.KdeCliPath);
-                
-                bool targetDeviceFound = false;
-                if (!string.IsNullOrEmpty(_settings.KdeDeviceId) && devices.Count > 0)
-                {
-                    foreach (var d in devices)
-                    {
-                        if (d.Id == _settings.KdeDeviceId)
-                        {
-                            _kdeDeviceName = d.Name;
-                            _kdeDeviceReachable = d.Reachable;
-                            targetDeviceFound = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!targetDeviceFound)
-                {
-                    _kdeDeviceReachable = false;
-                    if (!string.IsNullOrEmpty(_settings.KdeDeviceId))
-                    {
-                        Logger.Warn($"Target Device ID '{_settings.KdeDeviceId}' was not found in discovered devices.");
-                    }
-                }
+                var devices = RefreshKdeDeviceState();
 
                 // POST diagnostics to WordPress
                 await WordPressAgentClient.SendDiagnosticsAsync(_settings, cliFound, devices);
 
                 // Update UI thread menu states
-                UpdateMenuStates(true);
+                UpdateMenuStates(_kdeDeviceReachable);
             }
             catch (Exception ex)
             {
                 Logger.Error("Error executing background discovery diagnostics.", ex);
             }
+        }
+
+        private System.Collections.Generic.List<KdeDevice> RefreshKdeDeviceState()
+        {
+            var devices = KdeCliHelper.DiscoverDevices(_settings.KdeCliPath);
+            bool targetDeviceFound = false;
+            _kdeDeviceReachable = false;
+
+            foreach (var device in devices)
+            {
+                if (string.Equals(device.Id, _settings.KdeDeviceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _kdeDeviceName = device.Name;
+                    _kdeDeviceReachable = device.Reachable;
+                    targetDeviceFound = true;
+                    break;
+                }
+            }
+
+            if (!targetDeviceFound && !string.IsNullOrEmpty(_settings.KdeDeviceId))
+                Logger.Warn($"Target Device ID '{_settings.KdeDeviceId}' is disconnected or was not found.");
+
+            return devices;
         }
 
         private void UpdateMenuStates(bool isOnline)
@@ -345,6 +428,11 @@ namespace OlamaMessageAgent
         {
             Logger.Info("Exit requested. Terminating agent application.");
             _heartbeatTimer.Stop();
+            _dispatcherTimer.Stop();
+            if (_dispatcher != null && _dispatcher.IsEnabled)
+            {
+                _dispatcher.Disable();
+            }
             _notifyIcon.Visible = false;
             
             if (_currentIcon != null)
@@ -355,6 +443,124 @@ namespace OlamaMessageAgent
             
             _notifyIcon.Dispose();
             Application.Exit();
+        }
+
+        // ── Dispatcher operator controls (Phase 4 Run 4C) ────────────────────
+
+        private async void EnableDispatcher()
+        {
+            string error = _dispatcher.Enable();
+            if (error != null)
+            {
+                MessageBox.Show(
+                    $"Cannot enable dispatcher:\n\n{error}",
+                    "Dispatcher Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                UpdateDispatcherMenuState();
+                return;
+            }
+
+            // Start dispatcher timer using loaded config interval
+            _dispatcherTimer.Interval = 30000; // Will be updated after first config load
+            _dispatcherTimer.Start();
+            _settings.DispatcherEnabled = true;
+            SettingsManager.SaveSettings(_settings);
+            UpdateDispatcherMenuState();
+
+            // Immediately kick off first poll
+            await TriggerDispatcherPollAsync();
+        }
+
+        private void DisableDispatcher()
+        {
+            _dispatcherTimer.Stop();
+            _dispatcher.Disable();
+            _settings.DispatcherEnabled = false;
+            SettingsManager.SaveSettings(_settings);
+            UpdateDispatcherMenuState();
+        }
+
+        private async Task TriggerDispatcherPollAsync()
+        {
+            Logger.Info("Manual dispatcher poll requested by operator.");
+            await RunDispatcherTickAsync();
+        }
+
+        private async Task RunDispatcherTickAsync()
+        {
+            if (_dispatcherPollInProgress)
+            {
+                Logger.Warn("Dispatcher tick skipped — previous poll still in progress.");
+                return;
+            }
+
+            if (!_dispatcher.IsEnabled) return;
+
+            try
+            {
+                _dispatcherPollInProgress = true;
+                _dispatcherTimer.Stop();
+                UpdateDispatcherMenuState();
+
+                var result = await _dispatcher.PollOnceAsync();
+
+                // Update dispatcher timer interval if config was loaded
+                if (result.Success)
+                {
+                    // Re-read interval from dispatcher's config each cycle
+                    _dispatcherTimer.Interval = Math.Max(10000,
+                        GetDispatcherPollIntervalMs());
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Unhandled exception in dispatcher tick.", ex);
+            }
+            finally
+            {
+                _dispatcherPollInProgress = false;
+                if (_dispatcher.IsEnabled)
+                {
+                    _dispatcherTimer.Start();
+                }
+                UpdateDispatcherMenuState();
+            }
+        }
+
+        private int GetDispatcherPollIntervalMs()
+        {
+            if (_dispatcher == null) return 30000;
+            return _dispatcher.PollIntervalSeconds * 1000;
+        }
+
+        private void UpdateDispatcherMenuState()
+        {
+            if (_contextMenu.InvokeRequired)
+            {
+                _contextMenu.BeginInvoke(new Action(UpdateDispatcherMenuState));
+                return;
+            }
+
+            bool enabled = _dispatcher != null && _dispatcher.IsEnabled;
+            DispatcherState state = _dispatcher != null ? _dispatcher.CurrentState : DispatcherState.Disabled;
+
+            string stateLabel;
+            switch (state)
+            {
+                case DispatcherState.Idle:     stateLabel = "Idle";     break;
+                case DispatcherState.Polling:  stateLabel = "Polling";  break;
+                case DispatcherState.Reserved: stateLabel = "Reserved"; break;
+                case DispatcherState.DryRun:   stateLabel = "Dry Run";  break;
+                case DispatcherState.Error:    stateLabel = "Error";    break;
+                default:                       stateLabel = "Disabled"; break;
+            }
+
+            _menuDispatcherStatus.Text    = $"Dispatcher: {stateLabel}";
+            _menuDispatcherEnable.Enabled = !enabled;
+            _menuDispatcherDisable.Enabled = enabled;
+            _menuDispatcherPollNow.Enabled = enabled && !_dispatcherPollInProgress;
         }
     }
 }

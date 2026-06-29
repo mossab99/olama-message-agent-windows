@@ -166,19 +166,26 @@ namespace OlamaMessageAgent
                 return;
             }
 
-            // Perform simple light heartbeat (no process execution)
+            // Test both the server/API and the selected KDE device. HTTP 200 alone
+            // must not be presented as end-to-end SMS connectivity.
             bool cliFound = KdeCliHelper.DetectCli(testSettings.KdeCliPath);
+            bool deviceReachable = cliFound && KdeCliHelper.IsDeviceReachable(testSettings.KdeCliPath, testSettings.KdeDeviceId);
             var result = await WordPressAgentClient.SendHeartbeatAsync(
                 testSettings, 
                 cliFound, 
                 string.Empty, 
-                false
+                deviceReachable
             );
 
-            if (result.Success)
+            if (result.Success && deviceReachable)
             {
                 lblStatus.Text = $"Success! Status: Online ({result.StatusCode})";
                 lblStatus.ForeColor = Color.DarkGreen;
+            }
+            else if (result.Success)
+            {
+                lblStatus.Text = $"Server Online ({result.StatusCode}), but KDE device is disconnected.";
+                lblStatus.ForeColor = Color.Red;
             }
             else if (result.StatusCode == 403 || result.StatusCode == 401)
             {

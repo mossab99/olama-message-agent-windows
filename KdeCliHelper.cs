@@ -96,7 +96,10 @@ namespace OlamaMessageAgent
                             {
                                 id = remaining.Substring(0, spaceIdx).Trim();
                                 string status = remaining.Substring(spaceIdx + 1).Trim();
-                                reachable = status.IndexOf("reachable", StringComparison.OrdinalIgnoreCase) != -1;
+                                // Never use a substring match here: "unreachable" contains
+                                // "reachable" and would otherwise produce a dangerous false positive.
+                                reachable = status.IndexOf("unreachable", StringComparison.OrdinalIgnoreCase) == -1 &&
+                                            status.IndexOf("paired and reachable", StringComparison.OrdinalIgnoreCase) != -1;
                             }
 
                             devices.Add(new KdeDevice
@@ -117,6 +120,19 @@ namespace OlamaMessageAgent
             return devices;
         }
 
+        public static bool IsDeviceReachable(string cliPath, string deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return false;
+
+            foreach (var device in DiscoverDevices(cliPath))
+            {
+                if (string.Equals(device.Id, deviceId, StringComparison.OrdinalIgnoreCase))
+                    return device.Reachable;
+            }
+
+            return false;
+        }
+
         public static SmsSendResult SendSms(string cliPath, string deviceId, string phone, string message)
         {
             if (!DetectCli(cliPath))
@@ -127,6 +143,20 @@ namespace OlamaMessageAgent
                     ExitCode = -1,
                     Stdout = string.Empty,
                     Stderr = "KDE Connect CLI executable not found."
+                };
+            }
+
+            // kdeconnect-cli may exit with code 0 even when the remembered device is
+            // currently disconnected. Refuse to invoke --send-sms unless a fresh
+            // discovery confirms that this exact target is reachable.
+            if (!IsDeviceReachable(cliPath, deviceId))
+            {
+                return new SmsSendResult
+                {
+                    Success = false,
+                    ExitCode = -2,
+                    Stdout = string.Empty,
+                    Stderr = "Target KDE Connect device is disconnected or unreachable. SMS was not sent."
                 };
             }
 

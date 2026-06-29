@@ -14,6 +14,8 @@ namespace OlamaMessageAgent
         public int HeartbeatIntervalSeconds { get; set; } = 60;
         public string KdeCliPath { get; set; } = @"C:\Program Files\KDE Connect\bin\kdeconnect-cli.exe";
         public string KdeDeviceId { get; set; } = string.Empty;
+        public bool ReportDryRunFailures { get; set; } = false;
+        public bool DispatcherEnabled { get; set; } = true;
 
         // Run-time helper (not saved directly to JSON as plain text)
         [ScriptIgnore]
@@ -32,10 +34,18 @@ namespace OlamaMessageAgent
 
         static SettingsManager()
         {
-            SettingsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OlamaMessageAgent"
-            );
+            string envDir = Environment.GetEnvironmentVariable("OLAMA_AGENT_SETTINGS_DIR");
+            if (!string.IsNullOrEmpty(envDir))
+            {
+                SettingsDir = envDir;
+            }
+            else
+            {
+                SettingsDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OlamaMessageAgent"
+                );
+            }
             SettingsFilePath = Path.Combine(SettingsDir, "settings.json");
         }
 
@@ -101,6 +111,10 @@ namespace OlamaMessageAgent
         public static string DecryptKey(string base64Encrypted)
         {
             if (string.IsNullOrEmpty(base64Encrypted)) return string.Empty;
+            if (base64Encrypted.StartsWith("olama_agent_"))
+            {
+                return base64Encrypted;
+            }
             try
             {
                 byte[] encrypted = Convert.FromBase64String(base64Encrypted);
@@ -110,6 +124,11 @@ namespace OlamaMessageAgent
             catch (Exception ex)
             {
                 Logger.Error("DPAPI Decryption failed. API Key could not be read.", ex);
+                // Fallback: if input looks like a raw key, return it
+                if (base64Encrypted.StartsWith("olama_agent_"))
+                {
+                    return base64Encrypted;
+                }
                 return string.Empty;
             }
         }

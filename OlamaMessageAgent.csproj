@@ -66,6 +66,10 @@
     <Compile Include="ManualTestForm.Designer.cs">
       <DependentUpon>ManualTestForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="DispatchJob.cs" />
+    <Compile Include="DispatcherConfig.cs" />
+    <Compile Include="DispatcherResult.cs" />
+    <Compile Include="DispatcherService.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

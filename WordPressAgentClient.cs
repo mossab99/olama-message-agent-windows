@@ -69,7 +69,8 @@ namespace OlamaMessageAgent
             AgentSettings settings, 
             bool kdeCliFound, 
             string kdeDeviceName, 
-            bool kdeDeviceReachable)
+            bool kdeDeviceReachable,
+            DispatcherService dispatcher = null)
         {
             string baseUrl = NormalizeBaseUrl(settings.SiteUrl);
             if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(settings.AgentUuid) || string.IsNullOrEmpty(settings.ApiKey))
@@ -97,6 +98,17 @@ namespace OlamaMessageAgent
                 { "kde_device_name", kdeDeviceName ?? string.Empty },
                 { "kde_device_reachable", kdeDeviceReachable }
             };
+
+            if (dispatcher != null)
+            {
+                payload["dispatcher_enabled"] = dispatcher.IsEnabled;
+                payload["dispatcher_state"] = dispatcher.CurrentState.ToString();
+                payload["dispatcher_last_poll_at"] = dispatcher.LastPollAt.HasValue
+                    ? dispatcher.LastPollAt.Value.ToString("yyyy-MM-dd HH:mm:ss")
+                    : string.Empty;
+                payload["dispatcher_last_result"] = dispatcher.LastResultMessage ?? string.Empty;
+                payload["dispatcher_last_error"] = dispatcher.LastErrorMessage ?? string.Empty;
+            }
 
             string jsonPayload = Serializer.Serialize(payload);
 

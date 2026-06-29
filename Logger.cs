@@ -14,10 +14,18 @@ namespace OlamaMessageAgent
 
         static Logger()
         {
-            LogDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OlamaMessageAgent"
-            );
+            string envDir = Environment.GetEnvironmentVariable("OLAMA_AGENT_SETTINGS_DIR");
+            if (!string.IsNullOrEmpty(envDir))
+            {
+                LogDir = envDir;
+            }
+            else
+            {
+                LogDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OlamaMessageAgent"
+                );
+            }
             LogFilePath = Path.Combine(LogDir, "agent.log");
 
             try
