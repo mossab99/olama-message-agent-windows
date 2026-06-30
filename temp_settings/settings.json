@@ -1,0 +1,9 @@
+{
+    "SiteUrl": "http:\/\/olama3.local",
+    "AgentUuid": "22f13530-1f6c-4a22-b559-201c5b957b11",
+    "ProtectedApiKeyBase64": "olama_agent_2154dda3fe8894ac9e19516814f742a398b97ce0f365c288ab35114658a28f9a",
+    "HeartbeatIntervalSeconds": 10,
+    "KdeCliPath": "C:\\Program Files\\KDE Connect\\bin\\kdeconnect-cli.exe",
+    "KdeDeviceId": "7acee31170a743a7bae6765d018eb266",
+    "ReportDryRunFailures": false
+}
