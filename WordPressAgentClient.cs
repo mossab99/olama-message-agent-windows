@@ -89,7 +89,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "platform", "Windows" },
-                { "app_version", "1.0.0" },
+                { "app_version", "1.0.1" },
                 { "machine_name", Environment.MachineName },
                 { "windows_user", Environment.UserName },
                 { "kde_cli_path", settings.KdeCliPath ?? string.Empty },
@@ -160,9 +160,17 @@ namespace OlamaMessageAgent
                     Success = false,
                     StatusCode = 0,
                     Message = "Connection failed",
-                    ErrorDetails = ex.Message
+                    ErrorDetails = GetExceptionSummary(ex)
                 };
             }
+        }
+
+        private static string GetExceptionSummary(Exception ex)
+        {
+            if (ex == null) return "Unknown error";
+            Exception deepest = ex;
+            while (deepest.InnerException != null) deepest = deepest.InnerException;
+            return deepest == ex ? ex.Message : ex.Message + " | " + deepest.GetType().Name + ": " + deepest.Message;
         }
 
         public static async Task<HeartbeatResult> SendDiagnosticsAsync(

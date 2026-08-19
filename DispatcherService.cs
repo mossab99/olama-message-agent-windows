@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -71,6 +72,17 @@ namespace OlamaMessageAgent
 
         // ── Loaded config (null until first successful LoadConfigAsync call) ──
         private DispatcherConfig _config = null;
+        private PendingResult _pendingResult = null;
+        private bool _pendingResultPersistenceError = false;
+
+        public sealed class PendingResult
+        {
+            public int QueueId { get; set; }
+            public string Status { get; set; }
+            public int? KdeExitCode { get; set; }
+            public string Stdout { get; set; }
+            public string Stderr { get; set; }
+        }
 
         /// <summary>Loaded poll interval from server configuration. Defaults to 30s.</summary>
         public int PollIntervalSeconds
@@ -83,6 +95,11 @@ namespace OlamaMessageAgent
         {
             _settings = settings ?? throw new ArgumentNullException("settings");
             this.ReportDryRunFailures = _settings.ReportDryRunFailures;
+            _pendingResult = LoadPendingResult();
+            if (_pendingResult != null)
+            {
+                Logger.Warn($"Recovered an unacknowledged result for queue_id={_pendingResult.QueueId} from disk.");
+            }
         }
 
         // ── Operator controls ────────────────────────────────────────────────
@@ -129,6 +146,32 @@ namespace OlamaMessageAgent
             if (!IsEnabled)
             {
                 return DispatcherResult.Fail(0, "Dispatcher is disabled.");
+            }
+
+            if (_pendingResult == null && _pendingResultPersistenceError)
+            {
+                CurrentState = DispatcherState.Error;
+                return DispatcherResult.Fail(0, "Pending result recovery failed. Inspect or remove pending-dispatch-result.json before sending more SMS messages.");
+            }
+
+            // Result acknowledgement only needs WordPress connectivity. Retry it
+            // before KDE prerequisite checks so a disconnected phone cannot strand
+            // the outcome of a send that already happened.
+            if (_pendingResult != null)
+            {
+                Logger.Warn($"Retrying unacknowledged result for queue_id={_pendingResult.QueueId} before reserving another job.");
+                bool acknowledged = await PostResultAsync(
+                    _pendingResult.QueueId,
+                    _pendingResult.Status,
+                    _pendingResult.KdeExitCode,
+                    _pendingResult.Stdout,
+                    _pendingResult.Stderr);
+                if (!acknowledged)
+                {
+                    CurrentState = DispatcherState.Error;
+                    return DispatcherResult.Fail(0, $"Result for job {_pendingResult.QueueId} is still awaiting acknowledgement.");
+                }
+                ClearPendingResult();
             }
 
             // Re-validate prerequisites on every poll tick
@@ -224,7 +267,24 @@ namespace OlamaMessageAgent
                     string status = sendResult.Success ? "sent_by_kde" : "failed";
                     Logger.Info($"KDE Send completed. Success={sendResult.Success} ExitCode={sendResult.ExitCode} Status={status}");
 
-                    await PostResultAsync(job.QueueId, status, sendResult.ExitCode, sendResult.Stdout, sendResult.Stderr);
+                    SetPendingResult(new PendingResult
+                    {
+                        QueueId = job.QueueId,
+                        Status = status,
+                        KdeExitCode = sendResult.ExitCode,
+                        Stdout = sendResult.Stdout,
+                        Stderr = sendResult.Stderr
+                    });
+                    bool acknowledged = await PostResultAsync(job.QueueId, status, sendResult.ExitCode, sendResult.Stdout, sendResult.Stderr);
+                    if (acknowledged)
+                    {
+                        ClearPendingResult();
+                    }
+                    else
+                    {
+                        CurrentState = DispatcherState.Error;
+                        return DispatcherResult.Fail(0, $"SMS execution completed, but WordPress did not acknowledge job {job.QueueId}.");
+                    }
 
                     if (LastResultMessage == null && LastErrorMessage == null)
                     {
@@ -243,7 +303,18 @@ namespace OlamaMessageAgent
                     Logger.Error($"Unhandled exception during SMS dispatch for queue_id={job.QueueId}.", ex);
                     try
                     {
-                        await PostResultAsync(job.QueueId, "failed", -1, "", "Exception: " + ex.Message);
+                        SetPendingResult(new PendingResult
+                        {
+                            QueueId = job.QueueId,
+                            Status = "failed",
+                            KdeExitCode = -1,
+                            Stdout = "",
+                            Stderr = "Exception: " + ex.Message
+                        });
+                        if (await PostResultAsync(job.QueueId, "failed", -1, "", "Exception: " + ex.Message))
+                        {
+                            ClearPendingResult();
+                        }
                     }
                     catch
                     {
@@ -437,7 +508,7 @@ namespace OlamaMessageAgent
         /// <summary>
         /// Post the real execution result of an SMS send attempt to WordPress.
         /// </summary>
-        private async Task PostResultAsync(int queueId, string status, int? kdeExitCode, string stdout, string stderr)
+        private async Task<bool> PostResultAsync(int queueId, string status, int? kdeExitCode, string stdout, string stderr)
         {
             string baseUrl = WordPressAgentClient.NormalizeBaseUrl(_settings.SiteUrl);
             string endpoint = baseUrl + "/wp-json/olama-messages/v1/agent/jobs/result";
@@ -454,45 +525,56 @@ namespace OlamaMessageAgent
 
             string jsonPayload = Serializer.Serialize(payload);
 
-            try
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+                try
                 {
-                    AddAuthHeaders(request);
-                    request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-                    using (var response = await HttpClient.SendAsync(request))
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
                     {
-                        int code = (int)response.StatusCode;
-                        if (response.IsSuccessStatusCode)
+                        AddAuthHeaders(request);
+                        request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                        using (var response = await HttpClient.SendAsync(request))
                         {
-                            Logger.Info($"Sent result for queue_id={queueId} accepted by WordPress (HTTP {code}).");
-                            if (status == "sent_by_kde")
+                            int code = (int)response.StatusCode;
+                            if (response.IsSuccessStatusCode)
                             {
-                                LastResultMessage = $"Job {queueId} sent and result posted successfully.";
-                                LastErrorMessage = null;
+                                Logger.Info($"Sent result for queue_id={queueId} accepted by WordPress (HTTP {code}).");
+                                if (status == "sent_by_kde")
+                                {
+                                    LastResultMessage = $"Job {queueId} sent and result posted successfully.";
+                                    LastErrorMessage = null;
+                                }
+                                else
+                                {
+                                    LastErrorMessage = $"Job {queueId} failed and result posted successfully.";
+                                    LastResultMessage = null;
+                                }
+                                return true;
                             }
                             else
                             {
-                                LastErrorMessage = $"Job {queueId} failed and result posted successfully.";
+                                Logger.Warn($"Sent result for queue_id={queueId} rejected by WordPress: HTTP {code} (attempt {attempt}/3).");
+                                LastErrorMessage = $"Result post rejected by WordPress: HTTP {code}";
                                 LastResultMessage = null;
                             }
                         }
-                        else
-                        {
-                            Logger.Warn($"Sent result for queue_id={queueId} rejected by WordPress: HTTP {code}.");
-                            LastErrorMessage = $"Result post rejected by WordPress: HTTP {code}";
-                            LastResultMessage = null;
-                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to post sent result for queue_id={queueId} (attempt {attempt}/3).", ex);
+                    LastErrorMessage = $"Result post exception: {GetExceptionSummary(ex)}";
+                    LastResultMessage = null;
+                }
+
+                if (attempt < 3)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(attempt * 2));
+                }
             }
-            catch (Exception ex)
-            {
-                Logger.Error($"Failed to post sent result for queue_id={queueId}.", ex);
-                LastErrorMessage = $"Result post exception: {ex.Message}";
-                LastResultMessage = null;
-            }
+
+            return false;
         }
 
         // ── Prerequisite validator ───────────────────────────────────────────
@@ -530,6 +612,66 @@ namespace OlamaMessageAgent
         {
             request.Headers.Add("X-Olama-Agent-UUID", _settings.AgentUuid);
             request.Headers.Add("X-Olama-Agent-Key",  _settings.ApiKey);
+        }
+
+        private static string GetExceptionSummary(Exception ex)
+        {
+            if (ex == null) return "Unknown error";
+            Exception deepest = ex;
+            while (deepest.InnerException != null) deepest = deepest.InnerException;
+            return deepest == ex ? ex.Message : ex.Message + " | " + deepest.GetType().Name + ": " + deepest.Message;
+        }
+
+        private void SetPendingResult(PendingResult pendingResult)
+        {
+            _pendingResult = pendingResult;
+            try
+            {
+                string path = SettingsManager.GetDataFilePath("pending-dispatch-result.json");
+                string tempPath = path + ".tmp";
+                File.WriteAllText(tempPath, Serializer.Serialize(pendingResult), Encoding.UTF8);
+                if (File.Exists(path))
+                    File.Replace(tempPath, path, null);
+                else
+                    File.Move(tempPath, path);
+                _pendingResultPersistenceError = false;
+            }
+            catch (Exception ex)
+            {
+                _pendingResultPersistenceError = true;
+                Logger.Error("Failed to persist the pending dispatcher result.", ex);
+            }
+        }
+
+        private PendingResult LoadPendingResult()
+        {
+            try
+            {
+                string path = SettingsManager.GetDataFilePath("pending-dispatch-result.json");
+                if (!File.Exists(path)) return null;
+                return Serializer.Deserialize<PendingResult>(File.ReadAllText(path, Encoding.UTF8));
+            }
+            catch (Exception ex)
+            {
+                _pendingResultPersistenceError = true;
+                Logger.Error("Failed to load the pending dispatcher result.", ex);
+                return null;
+            }
+        }
+
+        private void ClearPendingResult()
+        {
+            _pendingResult = null;
+            try
+            {
+                string path = SettingsManager.GetDataFilePath("pending-dispatch-result.json");
+                if (File.Exists(path)) File.Delete(path);
+                _pendingResultPersistenceError = false;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to remove the acknowledged dispatcher result file.", ex);
+            }
         }
 
         /// <summary>

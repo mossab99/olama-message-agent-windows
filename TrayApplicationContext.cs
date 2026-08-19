@@ -506,13 +506,11 @@ namespace OlamaMessageAgent
 
                 var result = await _dispatcher.PollOnceAsync();
 
-                // Update dispatcher timer interval if config was loaded
-                if (result.Success)
-                {
-                    // Re-read interval from dispatcher's config each cycle
-                    _dispatcherTimer.Interval = Math.Max(10000,
-                        GetDispatcherPollIntervalMs());
-                }
+                // Re-read the interval even after a failed reserve request. Startup
+                // temporarily uses a one-second timer; retaining it on failure causes
+                // a request storm precisely while the server/network is unhealthy.
+                _dispatcherTimer.Interval = Math.Max(10000,
+                    GetDispatcherPollIntervalMs());
             }
             catch (Exception ex)
             {

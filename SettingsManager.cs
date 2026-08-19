@@ -92,6 +92,15 @@ namespace OlamaMessageAgent
             }
         }
 
+        public static string GetDataFilePath(string fileName)
+        {
+            if (!Directory.Exists(SettingsDir))
+            {
+                Directory.CreateDirectory(SettingsDir);
+            }
+            return Path.Combine(SettingsDir, fileName);
+        }
+
         public static string EncryptKey(string rawKey)
         {
             if (string.IsNullOrEmpty(rawKey)) return string.Empty;

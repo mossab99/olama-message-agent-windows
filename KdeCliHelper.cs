@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace OlamaMessageAgent
 {
@@ -23,6 +24,18 @@ namespace OlamaMessageAgent
 
     public static class KdeCliHelper
     {
+        private const int DiscoveryTimeoutMilliseconds = 10000;
+        private const int SendTimeoutMilliseconds = 30000;
+
+        private sealed class CliExecutionResult
+        {
+            public bool Started { get; set; }
+            public bool TimedOut { get; set; }
+            public int ExitCode { get; set; } = -1;
+            public string Stdout { get; set; } = string.Empty;
+            public string Stderr { get; set; } = string.Empty;
+        }
+
         public static bool DetectCli(string cliPath)
         {
             if (string.IsNullOrWhiteSpace(cliPath)) return false;
@@ -59,18 +72,14 @@ namespace OlamaMessageAgent
                     StandardOutputEncoding = Encoding.UTF8
                 };
 
-                using (var process = Process.Start(psi))
+                var execution = ExecuteProcess(psi, DiscoveryTimeoutMilliseconds, "device discovery");
+                if (execution.Started && !execution.TimedOut && execution.ExitCode == 0)
                 {
-                    if (process != null)
+                    string[] lines = execution.Stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                    foreach (string line in lines)
                     {
-                        string stdout = process.StandardOutput.ReadToEnd();
-                        process.WaitForExit();
-
-                        string[] lines = stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-                        foreach (string line in lines)
-                        {
-                            if (string.IsNullOrWhiteSpace(line)) continue;
-                            string trimmed = line.Trim();
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        string trimmed = line.Trim();
                             
                             // Expected output line format:
                             // "- Galaxy S21: 1234567890 (paired and reachable)"
@@ -102,14 +111,17 @@ namespace OlamaMessageAgent
                                             status.IndexOf("paired and reachable", StringComparison.OrdinalIgnoreCase) != -1;
                             }
 
-                            devices.Add(new KdeDevice
-                            {
-                                Id = id,
-                                Name = name,
-                                Reachable = reachable
-                            });
-                        }
+                        devices.Add(new KdeDevice
+                        {
+                            Id = id,
+                            Name = name,
+                            Reachable = reachable
+                        });
                     }
+                }
+                else if (execution.TimedOut)
+                {
+                    Logger.Warn("KDE device discovery timed out; treating the device as unreachable.");
                 }
             }
             catch (Exception ex)
@@ -176,35 +188,36 @@ namespace OlamaMessageAgent
                                 "--destination " + QuoteArg(phone)
                 };
 
-                using (var process = Process.Start(psi))
+                var execution = ExecuteProcess(psi, SendTimeoutMilliseconds, "SMS send");
+                if (!execution.Started)
                 {
-                    if (process == null)
-                    {
-                        return new SmsSendResult
-                        {
-                            Success = false,
-                            ExitCode = -1,
-                            Stdout = string.Empty,
-                            Stderr = "Failed to launch KDE CLI process."
-                        };
-                    }
-
-                    string stdout = process.StandardOutput.ReadToEnd();
-                    string stderr = process.StandardError.ReadToEnd();
-                    process.WaitForExit();
-
-                    // Truncate logs to 4000 characters to prevent DB overflow
-                    string truncatedStdout = stdout.Length > 4000 ? stdout.Substring(0, 4000) : stdout;
-                    string truncatedStderr = stderr.Length > 4000 ? stderr.Substring(0, 4000) : stderr;
-
                     return new SmsSendResult
                     {
-                        Success = (process.ExitCode == 0),
-                        ExitCode = process.ExitCode,
-                        Stdout = truncatedStdout,
-                        Stderr = truncatedStderr
+                        Success = false,
+                        ExitCode = -1,
+                        Stdout = string.Empty,
+                        Stderr = "Failed to launch KDE CLI process."
                     };
                 }
+
+                if (execution.TimedOut)
+                {
+                    return new SmsSendResult
+                    {
+                        Success = false,
+                        ExitCode = -3,
+                        Stdout = Truncate(execution.Stdout),
+                        Stderr = "KDE Connect CLI timed out after 30 seconds and was terminated."
+                    };
+                }
+
+                return new SmsSendResult
+                {
+                    Success = execution.ExitCode == 0,
+                    ExitCode = execution.ExitCode,
+                    Stdout = Truncate(execution.Stdout),
+                    Stderr = Truncate(execution.Stderr)
+                };
             }
             catch (Exception ex)
             {
@@ -217,6 +230,62 @@ namespace OlamaMessageAgent
                     Stderr = ex.Message.Length > 4000 ? ex.Message.Substring(0, 4000) : ex.Message
                 };
             }
+        }
+
+        private static CliExecutionResult ExecuteProcess(ProcessStartInfo startInfo, int timeoutMilliseconds, string operationName)
+        {
+            var result = new CliExecutionResult();
+            using (var process = new Process { StartInfo = startInfo })
+            {
+                if (!process.Start())
+                {
+                    return result;
+                }
+
+                result.Started = true;
+                Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(timeoutMilliseconds))
+                {
+                    result.TimedOut = true;
+                    Logger.Error($"KDE CLI {operationName} exceeded {timeoutMilliseconds / 1000} seconds; terminating process.");
+                    try
+                    {
+                        process.Kill();
+                        process.WaitForExit(2000);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"Failed to terminate timed-out KDE CLI {operationName} process.", ex);
+                    }
+                }
+
+                // Both streams are drained concurrently to prevent stdout/stderr pipe deadlocks.
+                try
+                {
+                    Task.WaitAll(new Task[] { stdoutTask, stderrTask }, 2000);
+                }
+                catch (AggregateException ex)
+                {
+                    Logger.Error($"Failed while reading KDE CLI {operationName} output.", ex.Flatten());
+                }
+
+                if (stdoutTask.Status == TaskStatus.RanToCompletion)
+                    result.Stdout = stdoutTask.Result ?? string.Empty;
+                if (stderrTask.Status == TaskStatus.RanToCompletion)
+                    result.Stderr = stderrTask.Result ?? string.Empty;
+                if (!result.TimedOut && process.HasExited)
+                    result.ExitCode = process.ExitCode;
+
+                return result;
+            }
+        }
+
+        private static string Truncate(string value)
+        {
+            value = value ?? string.Empty;
+            return value.Length > 4000 ? value.Substring(0, 4000) : value;
         }
 
         private static string QuoteArg(string value)

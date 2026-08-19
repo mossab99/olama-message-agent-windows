@@ -60,6 +60,12 @@ namespace OlamaMessageAgent
             {
                 sb.AppendLine();
                 sb.Append("Exception: ").Append(ex.GetType().Name).Append(" - ").AppendLine(ex.Message);
+                Exception inner = ex.InnerException;
+                while (inner != null)
+                {
+                    sb.Append("Caused by: ").Append(inner.GetType().Name).Append(" - ").AppendLine(inner.Message);
+                    inner = inner.InnerException;
+                }
                 sb.Append("Stack Trace: ").Append(ex.StackTrace);
             }
             Log("ERROR", sb.ToString());
