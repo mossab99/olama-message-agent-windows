@@ -47,8 +47,16 @@ class RecoveryTests {
         Check(response.Success && Sends()==1,"one synthetic command executes with intent already on disk");
         Check(lastBody.Contains("attempt_id") && lastBody.Contains("sent_by_kde"),"exact attempt result reported");
         Check(!File.Exists(Path.Combine(dir,"pending-dispatch-result.json")),"acknowledged result cleared");
-        int before=reserves; await worker.PollOnceAsync(); Check(reserves==before && Sends()==1,"local rate gate prevents extra reservation");
+        Check(worker.NextTickDelayMilliseconds(6000, response)==4000,"six seconds of processing leaves four seconds of a ten-second cycle");
+        Check(worker.NextTickDelayMilliseconds(12000, response)==250,"slow processing adds no full ten-second wait and never overlaps sends");
+        Check(worker.NextTickDelayMilliseconds(6000, DispatcherResult.Fail(503,"fixture"))>=10000,"network failures keep a full retry delay");
+        var firstIntent = new JavaScriptSerializer().Deserialize<Dictionary<string,List<DateTime>>>(File.ReadAllText(Path.Combine(dir,"sms-rate-history.json")))["synthetic-phone"][0];
+        var secondCycle=await worker.PollOnceAsync();
+        var twoIntents = new JavaScriptSerializer().Deserialize<Dictionary<string,List<DateTime>>>(File.ReadAllText(Path.Combine(dir,"sms-rate-history.json")))["synthetic-phone"];
+        double actualGap=(twoIntents[1]-firstIntent).TotalSeconds;
+        Check(secondCycle.Success && actualGap>=10 && actualGap<14,"preparation overlaps the pacing window; actual intents stay near ten seconds apart");
         Check(SmsRateLimiter.WaitSeconds("synthetic-phone")>0,"rate history survives worker recreation");
+        int before=reserves;
         var agedHistory = new Dictionary<string,List<DateTime>> { { "synthetic-phone", new List<DateTime> { DateTime.UtcNow.AddSeconds(-11) } } };
         File.WriteAllText(Path.Combine(dir,"sms-rate-history.json"),new JavaScriptSerializer().Serialize(agedHistory));
         Check(SmsRateLimiter.WaitSeconds("synthetic-phone")==0,"eleven-second-old intent permits next send without one-minute wait");

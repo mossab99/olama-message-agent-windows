@@ -44,6 +44,8 @@ namespace OlamaMessageAgent
         /// <summary>Current state for tray menu display.</summary>
         public DispatcherState CurrentState { get; private set; } = DispatcherState.Disabled;
 
+        public int SuggestedIdleDelayMilliseconds { get; private set; } = 10000;
+
         public DateTime? LastPollAt { get; private set; } = null;
         public string LastResultMessage { get; private set; } = null;
         public string LastErrorMessage { get; private set; } = null;
@@ -87,6 +89,13 @@ namespace OlamaMessageAgent
             {
                 Logger.Warn($"Recovered an unacknowledged result for queue_id={_pendingResult.QueueId} from disk.");
             }
+        }
+
+        public int NextTickDelayMilliseconds(long cycleMilliseconds, DispatcherResult result)
+        {
+            if (result == null || !result.Success) return Math.Max(10000, PollIntervalSeconds * 1000);
+            if (result.JobsReserved.Count == 0) return Math.Max(250, SuggestedIdleDelayMilliseconds);
+            return (int)Math.Max(250L, PollIntervalSeconds * 1000L - cycleMilliseconds);
         }
 
         // ── Operator controls ────────────────────────────────────────────────
@@ -161,10 +170,12 @@ namespace OlamaMessageAgent
                 ClearPendingResult();
             }
 
+            SuggestedIdleDelayMilliseconds = PollIntervalSeconds * 1000;
             LastPollAt = DateTime.UtcNow;
             int waitSeconds = SmsRateLimiter.WaitSeconds(_settings.KdeDeviceId);
-            if (waitSeconds > 0)
+            if (waitSeconds > 10)
             {
+                SuggestedIdleDelayMilliseconds = waitSeconds * 1000;
                 CurrentState = DispatcherState.Idle;
                 LastErrorMessage = null;
                 LastResultMessage = $"Rate limit: next SMS in approximately {waitSeconds} seconds.";
@@ -445,6 +456,9 @@ namespace OlamaMessageAgent
                             return DispatcherResult.Fail(code, $"Reserve endpoint returned HTTP {code}.");
                         }
 
+                        var envelope = Serializer.Deserialize<Dictionary<string, object>>(body);
+                        if (envelope != null && envelope.TryGetValue("poll_after_seconds", out object retryAfter))
+                            SuggestedIdleDelayMilliseconds = Math.Max(250, Convert.ToInt32(retryAfter) * 1000);
                         var jobs = ParseReservedJobs(body);
                         return DispatcherResult.Ok($"Poll succeeded. {jobs.Count} job(s) reserved.", jobs);
                     }

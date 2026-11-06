@@ -509,13 +509,11 @@ namespace OlamaMessageAgent
                 _dispatcherTimer.Stop();
                 UpdateDispatcherMenuState();
 
+                var cycleClock = System.Diagnostics.Stopwatch.StartNew();
                 var result = await _dispatcher.PollOnceAsync();
-
-                // Re-read the interval even after a failed reserve request. Startup
-                // temporarily uses a one-second timer; retaining it on failure causes
-                // a request storm precisely while the server/network is unhealthy.
-                _dispatcherTimer.Interval = Math.Max(10000,
-                    GetDispatcherPollIntervalMs());
+                // Target start-to-start cadence: normal request/KDE work is part
+                // of the interval. Failures retain a full retry delay.
+                _dispatcherTimer.Interval = _dispatcher.NextTickDelayMilliseconds(cycleClock.ElapsedMilliseconds, result);
             }
             catch (Exception ex)
             {

@@ -183,6 +183,10 @@ namespace OlamaMessageAgent
             bool invocationAttempted = false;
             try
             {
+                // Preparation runs during the cadence window. Wait only for any
+                // remaining fraction of the send interval, not another full cycle.
+                int remaining = SmsRateLimiter.WaitMilliseconds(deviceId);
+                if (remaining > 0 && remaining <= 10000) System.Threading.Thread.Sleep(remaining);
                 int wait = SmsRateLimiter.RecordIntent(deviceId);
                 if (wait > 0) return new SmsSendResult { ExitCode = -4, Stderr = $"SMS rate limit: wait {wait} seconds. No SMS was sent." };
                 var psi = new ProcessStartInfo

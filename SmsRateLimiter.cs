@@ -14,14 +14,18 @@ namespace OlamaMessageAgent
         private static readonly object Gate = new object();
         public static int WaitSeconds(string deviceId)
         {
-            lock (Gate) { return Remaining(Load(), deviceId); }
+            lock (Gate) { return (int)Math.Ceiling(RemainingMilliseconds(Load(), deviceId) / 1000.0); }
+        }
+        public static int WaitMilliseconds(string deviceId)
+        {
+            lock (Gate) { return RemainingMilliseconds(Load(), deviceId); }
         }
         public static int RecordIntent(string deviceId)
         {
             lock (Gate)
             {
                 var history = Load();
-                int wait = Remaining(history, deviceId);
+                int wait = (int)Math.Ceiling(RemainingMilliseconds(history, deviceId) / 1000.0);
                 if (wait > 0) return wait;
                 var now = DateTime.UtcNow;
                 List<DateTime> times;
@@ -43,7 +47,7 @@ namespace OlamaMessageAgent
             if (history == null) throw new InvalidDataException("Invalid SMS rate history. Sending stopped.");
             return history;
         }
-        private static int Remaining(Dictionary<string, List<DateTime>> history, string deviceId)
+        private static int RemainingMilliseconds(Dictionary<string, List<DateTime>> history, string deviceId)
         {
             if (string.IsNullOrWhiteSpace(deviceId)) return 0;
             List<DateTime> times;
@@ -54,7 +58,7 @@ namespace OlamaMessageAgent
             // Ten-second spacing and at most 360 intents per rolling hour.
             double seconds = (active.Last().AddSeconds(10) - now).TotalSeconds;
             if (active.Count >= 360) seconds = Math.Max(seconds, (active[active.Count - 360].AddHours(1) - now).TotalSeconds);
-            return Math.Max(0, (int)Math.Ceiling(seconds));
+            return Math.Max(0, (int)Math.Ceiling(seconds * 1000));
         }
     }
 }
