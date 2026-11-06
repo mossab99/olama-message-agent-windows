@@ -17,6 +17,7 @@ namespace OlamaMessageAgent
     public class SmsSendResult
     {
         public bool Success { get; set; }
+        public bool OutcomeUnknown { get; set; }
         public int ExitCode { get; set; }
         public string Stdout { get; set; }
         public string Stderr { get; set; }
@@ -24,6 +25,7 @@ namespace OlamaMessageAgent
 
     public static class KdeCliHelper
     {
+        private static readonly System.Threading.SemaphoreSlim SendGate = new System.Threading.SemaphoreSlim(1, 1);
         private const int DiscoveryTimeoutMilliseconds = 10000;
         private const int SendTimeoutMilliseconds = 30000;
 
@@ -147,6 +149,12 @@ namespace OlamaMessageAgent
 
         public static SmsSendResult SendSms(string cliPath, string deviceId, string phone, string message)
         {
+            if (!SendGate.Wait(0)) return new SmsSendResult { ExitCode = -4, Stderr = "Another SMS command is in progress. No SMS was sent." };
+            try { return SendSmsCore(cliPath, deviceId, phone, message); }
+            finally { SendGate.Release(); }
+        }
+        private static SmsSendResult SendSmsCore(string cliPath, string deviceId, string phone, string message)
+        {
             if (!DetectCli(cliPath))
             {
                 return new SmsSendResult
@@ -172,8 +180,11 @@ namespace OlamaMessageAgent
                 };
             }
 
+            bool invocationAttempted = false;
             try
             {
+                int wait = SmsRateLimiter.RecordIntent(deviceId);
+                if (wait > 0) return new SmsSendResult { ExitCode = -4, Stderr = $"SMS rate limit: wait {wait} seconds. No SMS was sent." };
                 var psi = new ProcessStartInfo
                 {
                     FileName = cliPath,
@@ -188,6 +199,7 @@ namespace OlamaMessageAgent
                                 "--destination " + QuoteArg(phone)
                 };
 
+                invocationAttempted = true;
                 var execution = ExecuteProcess(psi, SendTimeoutMilliseconds, "SMS send");
                 if (!execution.Started)
                 {
@@ -206,6 +218,7 @@ namespace OlamaMessageAgent
                     {
                         Success = false,
                         ExitCode = -3,
+                        OutcomeUnknown = true,
                         Stdout = Truncate(execution.Stdout),
                         Stderr = "KDE Connect CLI timed out after 30 seconds and was terminated."
                     };
@@ -214,6 +227,7 @@ namespace OlamaMessageAgent
                 return new SmsSendResult
                 {
                     Success = execution.ExitCode == 0,
+                    OutcomeUnknown = execution.ExitCode != 0,
                     ExitCode = execution.ExitCode,
                     Stdout = Truncate(execution.Stdout),
                     Stderr = Truncate(execution.Stderr)
@@ -227,6 +241,7 @@ namespace OlamaMessageAgent
                     Success = false,
                     ExitCode = -1,
                     Stdout = string.Empty,
+                    OutcomeUnknown = invocationAttempted,
                     Stderr = ex.Message.Length > 4000 ? ex.Message.Substring(0, 4000) : ex.Message
                 };
             }

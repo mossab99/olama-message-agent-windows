@@ -60,6 +60,7 @@
       <DependentUpon>LogViewerForm.cs</DependentUpon>
     </Compile>
     <Compile Include="KdeCliHelper.cs" />
+    <Compile Include="SmsRateLimiter.cs" />
     <Compile Include="ManualTestForm.cs">
       <SubType>Form</SubType>
     </Compile>

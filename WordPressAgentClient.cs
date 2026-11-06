@@ -89,7 +89,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "platform", "Windows" },
-                { "app_version", "1.0.1" },
+                { "app_version", "2.0.0" },
                 { "machine_name", Environment.MachineName },
                 { "windows_user", Environment.UserName },
                 { "kde_cli_path", settings.KdeCliPath ?? string.Empty },
@@ -103,6 +103,7 @@ namespace OlamaMessageAgent
             {
                 payload["dispatcher_enabled"] = dispatcher.IsEnabled;
                 payload["dispatcher_state"] = dispatcher.CurrentState.ToString();
+                payload["dispatch_protocol_version"] = 2;
                 payload["dispatcher_last_poll_at"] = dispatcher.LastPollAt.HasValue
                     ? dispatcher.LastPollAt.Value.ToString("yyyy-MM-dd HH:mm:ss")
                     : string.Empty;

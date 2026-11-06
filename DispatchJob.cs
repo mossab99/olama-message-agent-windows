@@ -11,6 +11,7 @@ namespace OlamaMessageAgent
     {
         /// <summary>Primary key of the queue record on the WordPress side.</summary>
         public int QueueId { get; set; }
+        public string AttemptId { get; set; }
 
         /// <summary>Campaign this job belongs to.</summary>
         public int CampaignId { get; set; }

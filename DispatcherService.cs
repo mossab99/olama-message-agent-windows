@@ -20,21 +20,7 @@ namespace OlamaMessageAgent
         Error       // Last poll ended in an unrecoverable error
     }
 
-    /// <summary>
-    /// Dispatcher skeleton for Phase 4 Run 4C.
-    ///
-    /// Responsibilities in Run 4C:
-    ///   • Load server-side dispatcher config from WordPress.
-    ///   • Poll the reserve endpoint on a configurable interval.
-    ///   • Log reserved jobs with masked phone and safe metadata.
-    ///   • In dry-run mode, optionally report a controlled failure result.
-    ///
-    /// FORBIDDEN in Run 4C:
-    ///   • Calling KdeCliHelper.SendSms()
-    ///   • Sending real SMS messages
-    ///   • Caching jobs across restarts
-    ///   • Enabling dispatcher automatically on startup
-    /// </summary>
+    /// <summary>Sequential SMS worker with durable attempt outcomes and acknowledgement recovery.</summary>
     public class DispatcherService
     {
         // ── Dependencies (injected at construction) ──────────────────────────
@@ -78,6 +64,7 @@ namespace OlamaMessageAgent
         public sealed class PendingResult
         {
             public int QueueId { get; set; }
+            public string AttemptId { get; set; }
             public string Status { get; set; }
             public int? KdeExitCode { get; set; }
             public string Stdout { get; set; }
@@ -110,7 +97,7 @@ namespace OlamaMessageAgent
         /// </summary>
         public string Enable()
         {
-            string reason = CheckPrerequisites();
+            string reason = _pendingResult != null ? null : CheckPrerequisites();
             if (reason != null)
             {
                 Logger.Warn($"Dispatcher enable rejected: {reason}");
@@ -165,7 +152,7 @@ namespace OlamaMessageAgent
                     _pendingResult.Status,
                     _pendingResult.KdeExitCode,
                     _pendingResult.Stdout,
-                    _pendingResult.Stderr);
+                    _pendingResult.Stderr, _pendingResult.AttemptId);
                 if (!acknowledged)
                 {
                     CurrentState = DispatcherState.Error;
@@ -174,8 +161,18 @@ namespace OlamaMessageAgent
                 ClearPendingResult();
             }
 
+            LastPollAt = DateTime.UtcNow;
+            int waitSeconds = SmsRateLimiter.WaitSeconds(_settings.KdeDeviceId);
+            if (waitSeconds > 0)
+            {
+                CurrentState = DispatcherState.Idle;
+                LastErrorMessage = null;
+                LastResultMessage = $"Rate limit: next SMS in approximately {waitSeconds} seconds.";
+                return DispatcherResult.Ok(LastResultMessage);
+            }
+
             // Re-validate prerequisites on every poll tick
-            string prereqFail = CheckPrerequisites();
+            string prereqFail = await Task.Run(() => CheckPrerequisites());
             if (prereqFail != null)
             {
                 CurrentState = DispatcherState.Error;
@@ -223,7 +220,7 @@ namespace OlamaMessageAgent
                 return result;
             }
 
-            // Jobs were reserved — log them (dry-run: never send)
+            // Log safe metadata only; message bodies remain in memory.
             CurrentState = DispatcherState.Reserved;
             LastResultMessage = $"Reserved {result.JobsReserved.Count} job(s).";
             LastErrorMessage = null;
@@ -255,30 +252,41 @@ namespace OlamaMessageAgent
             }
             else
             {
-                // Real sending path (Run 4D - Single SMS only with Circuit Breaker)
+                // Real sending path: one durable attempt per reservation.
                 CurrentState = DispatcherState.Reserved;
                 var job = result.JobsReserved[0]; // Process exactly 1 job per cycle for safety
 
                 try
                 {
+                    if (string.IsNullOrWhiteSpace(job.AttemptId) || job.ExpiresAt <= DateTime.UtcNow)
+                        throw new InvalidOperationException("SMS reservation is missing an attempt ID or has expired.");
+                    // Persist intent BEFORE invoking an external sender. After a crash,
+                    // recover this as unknown and report it; never invoke KDE again.
+                    if (!SetPendingResult(new PendingResult {
+                        QueueId = job.QueueId, AttemptId = job.AttemptId, Status = "unknown",
+                        KdeExitCode = -3, Stdout = "", Stderr = "Agent stopped before recording the SMS outcome. Check phone history."
+                    }))
+                        return DispatcherResult.Fail(0, "Cannot persist SMS intent. No SMS was sent.");
                     Logger.Info($"Invoking KDE Connect CLI to send SMS for queue_id={job.QueueId}...");
                     var sendResult = await Task.Run(() => KdeCliHelper.SendSms(_settings.KdeCliPath, _settings.KdeDeviceId, job.PhoneE164, job.MessageBody));
 
-                    string status = sendResult.Success ? "sent_by_kde" : "failed";
+                    string status = sendResult.Success ? "sent_by_kde" : (sendResult.OutcomeUnknown ? "unknown" : "failed");
                     Logger.Info($"KDE Send completed. Success={sendResult.Success} ExitCode={sendResult.ExitCode} Status={status}");
 
                     SetPendingResult(new PendingResult
                     {
                         QueueId = job.QueueId,
+                        AttemptId = job.AttemptId,
                         Status = status,
                         KdeExitCode = sendResult.ExitCode,
                         Stdout = sendResult.Stdout,
                         Stderr = sendResult.Stderr
                     });
-                    bool acknowledged = await PostResultAsync(job.QueueId, status, sendResult.ExitCode, sendResult.Stdout, sendResult.Stderr);
+                    bool acknowledged = await PostResultAsync(job.QueueId, status, sendResult.ExitCode, sendResult.Stdout, sendResult.Stderr, job.AttemptId);
                     if (acknowledged)
                     {
                         ClearPendingResult();
+                        CurrentState = sendResult.OutcomeUnknown ? DispatcherState.Error : DispatcherState.Idle;
                     }
                     else
                     {
@@ -290,7 +298,7 @@ namespace OlamaMessageAgent
                     {
                         if (sendResult.Success)
                         {
-                            LastResultMessage = $"Job {job.QueueId} sent successfully via KDE Connect.";
+                            LastResultMessage = $"Job {job.QueueId} submitted via KDE Connect.";
                         }
                         else
                         {
@@ -306,12 +314,13 @@ namespace OlamaMessageAgent
                         SetPendingResult(new PendingResult
                         {
                             QueueId = job.QueueId,
-                            Status = "failed",
+                            AttemptId = job.AttemptId,
+                            Status = "unknown",
                             KdeExitCode = -1,
                             Stdout = "",
                             Stderr = "Exception: " + ex.Message
                         });
-                        if (await PostResultAsync(job.QueueId, "failed", -1, "", "Exception: " + ex.Message))
+                        if (await PostResultAsync(job.QueueId, "unknown", -3, "", "Exception: " + ex.Message, job.AttemptId))
                         {
                             ClearPendingResult();
                         }
@@ -360,7 +369,7 @@ namespace OlamaMessageAgent
                             return DispatcherResult.Fail(code, $"Config endpoint returned HTTP {code}.");
                         }
 
-                        // Parse config fields — use defaults for any missing fields
+                        // Require the durable dispatch protocol before reserving a job.
                         _config = ParseConfig(body);
                         LastResultMessage = "Config loaded successfully.";
                         LastErrorMessage = null;
@@ -378,11 +387,11 @@ namespace OlamaMessageAgent
             catch (Exception ex)
             {
                 Logger.Error("Dispatcher config load failed.", ex);
-                // Fall back to safe defaults so we can still poll
-                _config = new DispatcherConfig();
+                // Fail closed: configuration and protocol must be verified before sending.
+                _config = null;
                 LastErrorMessage = $"Config load exception: {ex.Message}";
                 LastResultMessage = null;
-                return DispatcherResult.Fail(0, $"Config load failed: {ex.Message}. Using defaults.");
+                return DispatcherResult.Fail(0, $"Config load failed: {ex.Message}. Sending is stopped until configuration is verified.");
             }
         }
 
@@ -403,6 +412,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "max_jobs", maxJobs },
+                { "dispatch_protocol_version", 2 },
                 {
                     "capabilities", new Dictionary<string, object>
                     {
@@ -463,8 +473,9 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "queue_id",      job.QueueId },
+                { "attempt_id",    job.AttemptId },
                 { "status",        "failed" },
-                { "kde_exit_code", null },
+                { "kde_exit_code", -1 },
                 { "stdout",        "DRY_RUN_ONLY_NO_SMS_SENT" },
                 { "stderr",        string.Empty },
                 { "sent_at",       null }
@@ -508,7 +519,7 @@ namespace OlamaMessageAgent
         /// <summary>
         /// Post the real execution result of an SMS send attempt to WordPress.
         /// </summary>
-        private async Task<bool> PostResultAsync(int queueId, string status, int? kdeExitCode, string stdout, string stderr)
+        private async Task<bool> PostResultAsync(int queueId, string status, int? kdeExitCode, string stdout, string stderr, string attemptId = null)
         {
             string baseUrl = WordPressAgentClient.NormalizeBaseUrl(_settings.SiteUrl);
             string endpoint = baseUrl + "/wp-json/olama-messages/v1/agent/jobs/result";
@@ -516,6 +527,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "queue_id",      queueId },
+                { "attempt_id",    attemptId },
                 { "status",        status }, // "sent_by_kde" or "failed"
                 { "kde_exit_code", kdeExitCode },
                 { "stdout",        stdout },
@@ -542,12 +554,12 @@ namespace OlamaMessageAgent
                                 Logger.Info($"Sent result for queue_id={queueId} accepted by WordPress (HTTP {code}).");
                                 if (status == "sent_by_kde")
                                 {
-                                    LastResultMessage = $"Job {queueId} sent and result posted successfully.";
+                                    LastResultMessage = $"Job {queueId} submitted via KDE and result recorded.";
                                     LastErrorMessage = null;
                                 }
                                 else
                                 {
-                                    LastErrorMessage = $"Job {queueId} failed and result posted successfully.";
+                                    LastErrorMessage = status == "unknown" ? $"Job {queueId}: outcome unknown; review the phone history in WordPress before retrying." : $"Job {queueId} was not submitted; result recorded.";
                                     LastResultMessage = null;
                                 }
                                 return true;
@@ -622,7 +634,7 @@ namespace OlamaMessageAgent
             return deepest == ex ? ex.Message : ex.Message + " | " + deepest.GetType().Name + ": " + deepest.Message;
         }
 
-        private void SetPendingResult(PendingResult pendingResult)
+        private bool SetPendingResult(PendingResult pendingResult)
         {
             _pendingResult = pendingResult;
             try
@@ -635,11 +647,13 @@ namespace OlamaMessageAgent
                 else
                     File.Move(tempPath, path);
                 _pendingResultPersistenceError = false;
+                return true;
             }
             catch (Exception ex)
             {
                 _pendingResultPersistenceError = true;
                 Logger.Error("Failed to persist the pending dispatcher result.", ex);
+                return false;
             }
         }
 
@@ -649,7 +663,11 @@ namespace OlamaMessageAgent
             {
                 string path = SettingsManager.GetDataFilePath("pending-dispatch-result.json");
                 if (!File.Exists(path)) return null;
-                return Serializer.Deserialize<PendingResult>(File.ReadAllText(path, Encoding.UTF8));
+                var pending = Serializer.Deserialize<PendingResult>(File.ReadAllText(path, Encoding.UTF8));
+                if (pending == null || pending.QueueId <= 0 ||
+                    (pending.Status != "sent_by_kde" && pending.Status != "failed" && pending.Status != "unknown"))
+                    throw new InvalidDataException("Invalid pending SMS result.");
+                return pending;
             }
             catch (Exception ex)
             {
@@ -661,16 +679,17 @@ namespace OlamaMessageAgent
 
         private void ClearPendingResult()
         {
-            _pendingResult = null;
             try
             {
                 string path = SettingsManager.GetDataFilePath("pending-dispatch-result.json");
                 if (File.Exists(path)) File.Delete(path);
+                _pendingResult = null;
                 _pendingResultPersistenceError = false;
             }
             catch (Exception ex)
             {
                 Logger.Error("Failed to remove the acknowledged dispatcher result file.", ex);
+                throw;
             }
         }
 
@@ -696,12 +715,15 @@ namespace OlamaMessageAgent
             {
                 var dict = Serializer.Deserialize<Dictionary<string, object>>(json);
                 var cfg = new DispatcherConfig();
-                if (dict == null) return cfg;
+                if (dict == null) throw new InvalidDataException("Missing dispatcher configuration.");
 
                 // The WordPress response wraps data inside a "data" key
                 Dictionary<string, object> data = dict;
                 if (dict.ContainsKey("data") && dict["data"] is Dictionary<string, object> inner)
                     data = inner;
+
+                if (!data.TryGetValue("dispatch_protocol_version", out object version) || Convert.ToInt32(version) != 2)
+                    throw new InvalidDataException("Update the WordPress plugin to dispatch protocol 2 before sending.");
 
                 if (data.TryGetValue("poll_interval_seconds", out object pis))
                     cfg.PollIntervalSeconds = Math.Max(10, Convert.ToInt32(pis));
@@ -723,8 +745,8 @@ namespace OlamaMessageAgent
             }
             catch (Exception ex)
             {
-                Logger.Error("Failed to parse dispatcher config JSON. Using safe defaults.", ex);
-                return new DispatcherConfig();
+                Logger.Error("Failed to verify dispatcher configuration. Sending is stopped.", ex);
+                throw;
             }
         }
 
@@ -747,6 +769,7 @@ namespace OlamaMessageAgent
                     if (!(item is Dictionary<string, object> j)) continue;
 
                     var job = new DispatchJob();
+                    if (j.TryGetValue("attempt_id", out object aid)) job.AttemptId = aid?.ToString();
 
                     if (j.TryGetValue("queue_id",     out object qid)) job.QueueId    = Convert.ToInt32(qid);
                     if (j.TryGetValue("campaign_id",  out object cid)) job.CampaignId = Convert.ToInt32(cid);
@@ -757,8 +780,9 @@ namespace OlamaMessageAgent
                     // expires_at arrives as ISO 8601 UTC string
                     if (j.TryGetValue("expires_at", out object ea) && ea != null)
                     {
-                        if (DateTime.TryParse(ea.ToString(), out DateTime expiry))
-                            job.ExpiresAt = expiry.ToUniversalTime();
+                        if (DateTime.TryParse(ea.ToString(), System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out DateTime expiry))
+                            job.ExpiresAt = expiry;
                     }
 
                     // Derive MessageLength from body if server did not send it

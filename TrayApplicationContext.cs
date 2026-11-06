@@ -149,6 +149,11 @@ namespace OlamaMessageAgent
 
         public void ReloadSettings()
         {
+            if (_dispatcherPollInProgress)
+            {
+                MessageBox.Show("Wait for the active SMS attempt to finish before reloading settings.", "SMS in progress");
+                return;
+            }
             Logger.Info("Settings updated. Reloading agent configuration.");
             _settings = SettingsManager.LoadSettings();
 

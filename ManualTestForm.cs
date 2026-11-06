@@ -118,7 +118,7 @@ namespace OlamaMessageAgent
             }
             else
             {
-                AppendConsole("[FAILURE] KDE Connect CLI reported an execution error.");
+                AppendConsole(sendResult.OutcomeUnknown ? "[UNKNOWN] Check the phone history before retrying this SMS." : "[NOT SENT] " + sendResult.Stderr);
             }
 
             AppendConsole("[REST] Uploading audit results to WordPress...");
