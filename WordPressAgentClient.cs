@@ -89,7 +89,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "platform", "Windows" },
-                { "app_version", "2.0.0" },
+                { "app_version", "2.0.1" },
                 { "machine_name", Environment.MachineName },
                 { "windows_user", Environment.UserName },
                 { "kde_cli_path", settings.KdeCliPath ?? string.Empty },

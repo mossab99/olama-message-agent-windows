@@ -122,7 +122,7 @@ namespace OlamaMessageAgent
             _dispatcherTimer = new System.Windows.Forms.Timer();
             _dispatcherTimer.Tick += async (s, e) => await RunDispatcherTickAsync();
             // Default interval; will be updated from loaded config
-            _dispatcherTimer.Interval = 30000; // 30 seconds
+            _dispatcherTimer.Interval = 10000; // 10 seconds
 
             // Initialize dispatcher service and restore the operator's persisted choice.
             _dispatcher = new DispatcherService(_settings);
@@ -468,7 +468,7 @@ namespace OlamaMessageAgent
             }
 
             // Start dispatcher timer using loaded config interval
-            _dispatcherTimer.Interval = 30000; // Will be updated after first config load
+            _dispatcherTimer.Interval = 10000; // Will be updated after first config load
             _dispatcherTimer.Start();
             _settings.DispatcherEnabled = true;
             SettingsManager.SaveSettings(_settings);
@@ -534,7 +534,7 @@ namespace OlamaMessageAgent
 
         private int GetDispatcherPollIntervalMs()
         {
-            if (_dispatcher == null) return 30000;
+            if (_dispatcher == null) return 10000;
             return _dispatcher.PollIntervalSeconds * 1000;
         }
 

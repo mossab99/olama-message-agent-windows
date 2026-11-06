@@ -71,10 +71,10 @@ namespace OlamaMessageAgent
             public string Stderr { get; set; }
         }
 
-        /// <summary>Loaded poll interval from server configuration. Defaults to 30s.</summary>
+        /// <summary>Loaded poll interval from server configuration. Defaults to 10s.</summary>
         public int PollIntervalSeconds
         {
-            get { return _config != null ? _config.PollIntervalSeconds : 30; }
+            get { return _config != null ? _config.PollIntervalSeconds : 10; }
         }
 
         // ── Constructor ──────────────────────────────────────────────────────

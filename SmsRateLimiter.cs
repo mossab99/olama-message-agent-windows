@@ -51,9 +51,9 @@ namespace OlamaMessageAgent
             var now = DateTime.UtcNow;
             var active = times.Where(t => t > now.AddHours(-1)).OrderBy(t => t).ToList();
             if (active.Count == 0) return 0;
-            // 20-second minimum plus 60/hour => at least 60 seconds between intents.
-            double seconds = (active.Last().AddSeconds(60) - now).TotalSeconds;
-            if (active.Count >= 60) seconds = Math.Max(seconds, (active[active.Count - 60].AddHours(1) - now).TotalSeconds);
+            // Ten-second spacing and at most 360 intents per rolling hour.
+            double seconds = (active.Last().AddSeconds(10) - now).TotalSeconds;
+            if (active.Count >= 360) seconds = Math.Max(seconds, (active[active.Count - 360].AddHours(1) - now).TotalSeconds);
             return Math.Max(0, (int)Math.Ceiling(seconds));
         }
     }

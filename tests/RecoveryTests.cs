@@ -17,7 +17,7 @@ class RecoveryTests {
         while (listener.IsListening) {
             var context = await listener.GetContextAsync();
             string body;
-            if (context.Request.Url.AbsolutePath.EndsWith("/config")) body="{\"dispatch_protocol_version\":"+protocol+",\"poll_interval_seconds\":15}";
+            if (context.Request.Url.AbsolutePath.EndsWith("/config")) body="{\"dispatch_protocol_version\":"+protocol+",\"poll_interval_seconds\":10}";
             else if (context.Request.Url.AbsolutePath.EndsWith("/reserve")) {
                 reserves++;
                 string incoming = new StreamReader(context.Request.InputStream).ReadToEnd();
@@ -46,6 +46,9 @@ class RecoveryTests {
         Check(!File.Exists(Path.Combine(dir,"pending-dispatch-result.json")),"acknowledged result cleared");
         int before=reserves; await worker.PollOnceAsync(); Check(reserves==before && Sends()==1,"local rate gate prevents extra reservation");
         Check(SmsRateLimiter.WaitSeconds("synthetic-phone")>0,"rate history survives worker recreation");
+        var agedHistory = new Dictionary<string,List<DateTime>> { { "synthetic-phone", new List<DateTime> { DateTime.UtcNow.AddSeconds(-11) } } };
+        File.WriteAllText(Path.Combine(dir,"sms-rate-history.json"),new JavaScriptSerializer().Serialize(agedHistory));
+        Check(SmsRateLimiter.WaitSeconds("synthetic-phone")==0,"eleven-second-old intent permits next send without one-minute wait");
         CleanRate(); Environment.SetEnvironmentVariable("OLAMA_FAKE_MODE","fail"); await worker.PollOnceAsync();
         Check(lastBody.Contains("unknown"),"nonzero KDE result is uncertain, not automatically retryable");
         CleanRate(); Environment.SetEnvironmentVariable("OLAMA_FAKE_MODE","hang"); var watch=System.Diagnostics.Stopwatch.StartNew(); await worker.PollOnceAsync();
