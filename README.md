@@ -60,3 +60,6 @@ Each queue reservation has a unique attempt ID. The agent persists an unknown ou
 The shared local limiter persists submission intents in `sms-rate-history.json`. Campaign and manual sends use the same limit: at least 10 seconds between intents, with at most 360 per rolling hour. The server independently enforces device limits across agent registrations. Do not clear pending outcomes or rate history to bypass these checks.
 
 Run `./tests/run-recovery-tests.ps1` from this repository for synthetic recovery tests. They compile a fake CLI and use a localhost HTTP fixture; no real SMS is sent.
+
+
+Agent 2.0.3 targets a ten-second cycle including request and KDE processing time, instead of adding ten idle seconds after processing. The final local limiter still prevents submissions less than ten seconds apart. Failed requests keep a full retry delay. Slow network/device operations can exceed the target.
