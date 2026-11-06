@@ -65,6 +65,33 @@ namespace OlamaMessageAgent
             }
         }
 
+        // A settings probe verifies authentication without publishing worker telemetry.
+        // Calling heartbeat here used to erase the running dispatcher's device/name/state.
+        public static async Task<HeartbeatResult> TestConnectionAsync(AgentSettings settings)
+        {
+            try
+            {
+                string endpoint = NormalizeBaseUrl(settings.SiteUrl) + "/wp-json/olama-messages/v1/agent/jobs/config";
+                using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
+                {
+                    request.Headers.Add("X-Olama-Agent-UUID", settings.AgentUuid);
+                    request.Headers.Add("X-Olama-Agent-Key", settings.ApiKey);
+                    using (var response = await HttpClient.SendAsync(request))
+                    {
+                        return new HeartbeatResult {
+                            Success = response.IsSuccessStatusCode,
+                            StatusCode = (int)response.StatusCode,
+                            Message = response.IsSuccessStatusCode ? "Server authentication verified." : "Server rejected the connection test."
+                        };
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                return new HeartbeatResult { Success = false, StatusCode = 0, Message = "Connection failed", ErrorDetails = GetExceptionSummary(error) };
+            }
+        }
+
         public static async Task<HeartbeatResult> SendHeartbeatAsync(
             AgentSettings settings, 
             bool kdeCliFound, 
@@ -89,7 +116,7 @@ namespace OlamaMessageAgent
             var payload = new Dictionary<string, object>
             {
                 { "platform", "Windows" },
-                { "app_version", "2.0.1" },
+                { "app_version", "2.0.2" },
                 { "machine_name", Environment.MachineName },
                 { "windows_user", Environment.UserName },
                 { "kde_cli_path", settings.KdeCliPath ?? string.Empty },

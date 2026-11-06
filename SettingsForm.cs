@@ -169,17 +169,13 @@ namespace OlamaMessageAgent
             // Test both the server/API and the selected KDE device. HTTP 200 alone
             // must not be presented as end-to-end SMS connectivity.
             bool cliFound = KdeCliHelper.DetectCli(testSettings.KdeCliPath);
-            bool deviceReachable = cliFound && KdeCliHelper.IsDeviceReachable(testSettings.KdeCliPath, testSettings.KdeDeviceId);
-            var result = await WordPressAgentClient.SendHeartbeatAsync(
-                testSettings, 
-                cliFound, 
-                string.Empty, 
-                deviceReachable
-            );
+            bool deviceReachable = cliFound && await System.Threading.Tasks.Task.Run(() =>
+                KdeCliHelper.IsDeviceReachable(testSettings.KdeCliPath, testSettings.KdeDeviceId));
+            var result = await WordPressAgentClient.TestConnectionAsync(testSettings);
 
             if (result.Success && deviceReachable)
             {
-                lblStatus.Text = $"Success! Status: Online ({result.StatusCode})";
+                lblStatus.Text = $"Server OK ({result.StatusCode}); KDE device reachable";
                 lblStatus.ForeColor = Color.DarkGreen;
             }
             else if (result.Success)

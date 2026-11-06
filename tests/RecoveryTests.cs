@@ -39,6 +39,9 @@ class RecoveryTests {
         var portFinder = new TcpListener(IPAddress.Loopback,0); portFinder.Start(); int port=((IPEndPoint)portFinder.LocalEndpoint).Port; portFinder.Stop();
         listener=new HttpListener(); listener.Prefixes.Add("http://127.0.0.1:"+port+"/"); listener.Start(); var server=Serve();
         var settings=new AgentSettings { SiteUrl="http://127.0.0.1:"+port, AgentUuid="synthetic", ApiKey="synthetic", KdeCliPath=Path.GetFullPath(args[0]), KdeDeviceId="synthetic-phone" };
+        int oldResults=results, oldReserves=reserves;
+        var connectionTest=await WordPressAgentClient.TestConnectionAsync(settings);
+        Check(connectionTest.Success && results==oldResults && reserves==oldReserves,"settings connection test uses read-only config and never publishes heartbeat or reserves work");
         var worker=new DispatcherService(settings); Check(worker.Enable()==null,"fixture worker enabled");
         var response=await worker.PollOnceAsync();
         Check(response.Success && Sends()==1,"one synthetic command executes with intent already on disk");
